@@ -1,12 +1,26 @@
 -- ============================================================
--- 01_workload.sql  -  Crear workload y cargar SQLs
+-- 01_workload.sql  -  Configuracion + Crear workload y cargar SQLs
 -- ============================================================
--- Requiere haber ejecutado 00_config.sql en la misma sesion.
--- Carga dos fuentes:
---   A) El SQL especifico por &sql_id (SQL principal del proceso)
---   B) Todos los SQLs del cursor cache que referencian
---      cualquiera de las 40 tablas del proceso PYG
+-- Sesion origen: USERNAME=GUIA  SID=2297  Serial#=33661
+--
+-- Edita sql_id, task_name y wkld_name si es necesario.
+--
+-- Orden de ejecucion (misma sesion SQL*Plus):
+--   @access_advisor_pyg/01_workload.sql
+--   @access_advisor_pyg/02_advisor.sql
+--   @access_advisor_pyg/03_results.sql
 -- ============================================================
+
+DEFINE sql_id    = '90zdv03f74mvb'
+DEFINE task_name = 'ACC_ADV_PYG'
+DEFINE wkld_name = 'WKL_PYG'
+
+SET SERVEROUTPUT ON SIZE UNLIMITED
+SET LONG          65536
+SET LONGCHUNKSIZE 65536
+SET LINESIZE      200
+SET PAGESIZE      200
+SET VERIFY        OFF
 
 DECLARE
 
@@ -64,7 +78,6 @@ DECLARE
   v_dyn_sql    VARCHAR2(32767);
   v_obj_name   VARCHAR2(128);
 
-  -- Para cargar el SQL principal por sql_id
   v_sql_text   CLOB;
   v_executions NUMBER;
   v_elapsed    NUMBER;
@@ -116,13 +129,10 @@ BEGIN
   DBMS_OUTPUT.PUT_LINE(' Workload : &wkld_name');
   DBMS_OUTPUT.PUT_LINE(' sql_id   : &sql_id');
 
-  -- Crear el workload
   DBMS_ADVISOR.CREATE_SQLWKLD(workload_name => '&wkld_name');
   DBMS_OUTPUT.PUT_LINE(' Workload creado.');
 
-  -- ----------------------------------------------------------
-  -- A) Cargar el SQL principal por sql_id
-  -- ----------------------------------------------------------
+  -- A) SQL principal por sql_id
   BEGIN
     SELECT sql_fulltext, executions, elapsed_time, cpu_time, buffer_gets
     INTO   v_sql_text, v_executions, v_elapsed, v_cpu, v_gets
@@ -139,11 +149,7 @@ BEGIN
       DBMS_OUTPUT.PUT_LINE('        Continuando con busqueda por tablas...');
   END;
 
-  -- ----------------------------------------------------------
-  -- B) Cargar SQLs adicionales por nombre de tabla
-  --    Usa solo el nombre de objeto (sin schema) para que
-  --    funcione independientemente del owner en v$sql_plan
-  -- ----------------------------------------------------------
+  -- B) SQLs adicionales filtrando por nombre de tabla en v$sql_plan
   FOR i IN 1..v_tables.COUNT LOOP
     v_obj_name := SUBSTR(v_tables(i), INSTR(v_tables(i), '.') + 1);
     IF i = 1 THEN
