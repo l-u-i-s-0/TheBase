@@ -82,22 +82,15 @@ DECLARE
   v_dyn_sql    VARCHAR2(32767);
   v_obj_name   VARCHAR2(128);
 
+  -- CLOB se busca con SQL estatico por sql_id; BULK COLLECT solo recoge IDs
+  TYPE t_id_list IS TABLE OF VARCHAR2(13);
+  v_sql_ids    t_id_list := t_id_list();
+
   v_sql_text   CLOB;
   v_executions NUMBER;
   v_elapsed    NUMBER;
   v_cpu        NUMBER;
   v_gets       NUMBER;
-
-  TYPE t_sql_rec IS RECORD (
-    sql_id       VARCHAR2(13),
-    sql_text     CLOB,
-    executions   NUMBER,
-    elapsed_time NUMBER,
-    cpu_time     NUMBER,
-    buffer_gets  NUMBER
-  );
-  TYPE t_sql_tab IS TABLE OF t_sql_rec;
-  v_sqls t_sql_tab := t_sql_tab();
 
   PROCEDURE add_stmt(
     p_text    IN CLOB,
@@ -163,25 +156,34 @@ BEGIN
     END IF;
   END LOOP;
 
+  -- Recoge solo sql_id (VARCHAR2) para evitar ORA-00932 con CLOB en BULK COLLECT
   v_dyn_sql :=
-    'SELECT DISTINCT s.sql_id, s.sql_fulltext, s.executions, ' ||
-    '                s.elapsed_time, s.cpu_time, s.buffer_gets ' ||
+    'SELECT DISTINCT s.sql_id ' ||
     'FROM   v$sql s ' ||
     'WHERE  s.executions > 0 ' ||
-    '  AND  s.sql_id != ''&sql_id'' ' ||
+    '  AND  s.sql_id != :1 ' ||
     '  AND  EXISTS ( ' ||
     '    SELECT 1 FROM v$sql_plan p ' ||
     '    WHERE  p.sql_id = s.sql_id ' ||
     '    AND    p.object_name IN (' || v_in_list || ') ' ||
-    '  ) ' ||
-    'ORDER BY s.elapsed_time DESC';
+    '  )';
 
-  EXECUTE IMMEDIATE v_dyn_sql BULK COLLECT INTO v_sqls;
-  DBMS_OUTPUT.PUT_LINE(' SQLs adicionales encontrados: ' || v_sqls.COUNT);
+  EXECUTE IMMEDIATE v_dyn_sql BULK COLLECT INTO v_sql_ids USING '&sql_id';
+  DBMS_OUTPUT.PUT_LINE(' SQLs adicionales encontrados: ' || v_sql_ids.COUNT);
 
-  FOR i IN 1..v_sqls.COUNT LOOP
-    add_stmt(v_sqls(i).sql_text, v_sqls(i).executions,
-             v_sqls(i).elapsed_time, v_sqls(i).cpu_time, v_sqls(i).buffer_gets);
+  -- Busca el texto completo (CLOB) con SQL estatico, uno a uno
+  FOR i IN 1..v_sql_ids.COUNT LOOP
+    BEGIN
+      SELECT sql_fulltext, executions, elapsed_time, cpu_time, buffer_gets
+      INTO   v_sql_text, v_executions, v_elapsed, v_cpu, v_gets
+      FROM   v$sql
+      WHERE  sql_id = v_sql_ids(i)
+      AND    ROWNUM  = 1;
+
+      add_stmt(v_sql_text, v_executions, v_elapsed, v_cpu, v_gets);
+    EXCEPTION
+      WHEN NO_DATA_FOUND THEN NULL;
+    END;
   END LOOP;
 
   DBMS_OUTPUT.PUT_LINE('----------------------------------------------');
@@ -199,7 +201,7 @@ BEGIN
 EXCEPTION
   WHEN OTHERS THEN
     DBMS_OUTPUT.PUT_LINE('ERROR: ' || SQLERRM);
-    BEGIN DBMS_ADVISOR.DELETE_SQLWKLD('&wkld_name'); EXCEPTION WHEN OTHERS THEN NULL; END;
+    BEGIN DBMS_ADVISOR.DELETE_SQLWKLD(v_wkld_name); EXCEPTION WHEN OTHERS THEN NULL; END;
     RAISE;
 END;
 /
