@@ -30,9 +30,10 @@ BEGIN
   DBMS_OUTPUT.PUT_LINE(' Tarea creada.');
 
   -- 2. Vincular el workload a la tarea
-  DBMS_ADVISOR.LINK_SQLWKLD_TASK(
-    workload_name => v_wkld_name,
-    task_name     => v_task_name
+  --    (el procedimiento correcto es ADD_SQLWKLD_REF, no LINK_SQLWKLD_TASK)
+  DBMS_ADVISOR.ADD_SQLWKLD_REF(
+    task_name     => v_task_name,
+    workload_name => v_wkld_name
   );
   DBMS_OUTPUT.PUT_LINE(' Workload vinculado.');
 
