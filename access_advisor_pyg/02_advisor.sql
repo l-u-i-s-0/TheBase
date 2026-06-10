@@ -19,6 +19,9 @@ BEGIN
   DBMS_OUTPUT.PUT_LINE(' Workload : ' || v_wkld_name);
   DBMS_OUTPUT.PUT_LINE('----------------------------------------------');
 
+  -- 0. Limpieza idempotente: elimina la tarea si ya existe de un intento previo
+  BEGIN DBMS_ADVISOR.DELETE_TASK(v_task_name); EXCEPTION WHEN OTHERS THEN NULL; END;
+
   -- 1. Crear la tarea del SQL Access Advisor (task_name es IN OUT)
   DBMS_ADVISOR.CREATE_TASK(
     advisor_name => 'SQL Access Advisor',
@@ -39,6 +42,15 @@ BEGIN
   DBMS_ADVISOR.SET_TASK_PARAMETER(v_task_name, 'ANALYSIS_SCOPE', 'ALL');
   DBMS_ADVISOR.SET_TASK_PARAMETER(v_task_name, 'MODE',           'COMPREHENSIVE');
   DBMS_OUTPUT.PUT_LINE(' Parametros: ANALYSIS_SCOPE=ALL, MODE=COMPREHENSIVE');
+
+  -- OPCIONAL: restringir las recomendaciones SOLO a tablas concretas.
+  -- Por defecto el advisor analiza todas las tablas del workload (lo que
+  -- ya esta acotado a los SQLs que tocan las tablas del proceso PYG).
+  -- Si quieres limitarlo aun mas, descomenta y usa formato OWNER.TABLA
+  -- (es obligatorio el owner; por eso se deja desactivado por defecto):
+  --
+  -- DBMS_ADVISOR.SET_TASK_PARAMETER(v_task_name, 'VALID_TABLE_LIST',
+  --   'SASGUIA.PYGGASTOSREP, SASGUIA.PYGCTRCOST, GUIA.PYG_TMP_GASTOSPROD_FINAL');
 
   -- 4. Ejecutar
   DBMS_OUTPUT.PUT_LINE(' Ejecutando... (puede tardar varios minutos)');

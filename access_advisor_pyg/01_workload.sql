@@ -11,9 +11,10 @@
 --   @access_advisor_pyg/03_results.sql
 -- ============================================================
 
-DEFINE sql_id    = '90zdv03f74mvb'
-DEFINE task_name = 'ACC_ADV_PYG'
-DEFINE wkld_name = 'WKL_PYG'
+DEFINE sql_id     = '90zdv03f74mvb'
+DEFINE task_name  = 'ACC_ADV_PYG'
+DEFINE wkld_name  = 'WKL_PYG'
+DEFINE parse_user = 'GUIA'
 
 SET SERVEROUTPUT ON SIZE UNLIMITED
 SET LONG          65536
@@ -76,8 +77,11 @@ DECLARE
   -- Variables para parametros IN OUT de DBMS_ADVISOR
   -- (no se puede pasar un literal '&...' a un parametro IN OUT)
   v_wkld_name  VARCHAR2(100)   := '&wkld_name';
+  v_task_name  VARCHAR2(100)   := '&task_name';   -- solo para limpieza idempotente
 
   v_stmt_count PLS_INTEGER := 0;
+  v_skipped    PLS_INTEGER := 0;
+  v_last_err   VARCHAR2(4000);
   v_in_list    VARCHAR2(32767);
   v_dyn_sql    VARCHAR2(32767);
   v_obj_name   VARCHAR2(128);
@@ -111,12 +115,15 @@ DECLARE
       buffer_gets    => NVL(p_gets,    0),
       rows_processed => 0,
       executions     => NVL(p_exec,    1),
-      username       => 'GUIA',
+      username       => '&parse_user',
       sql_text       => p_text
     );
     v_stmt_count := v_stmt_count + 1;
   EXCEPTION
-    WHEN OTHERS THEN NULL;
+    -- DML/DDL/recursivo o SQL que no parsea: se descarta y se cuenta
+    WHEN OTHERS THEN
+      v_skipped  := v_skipped + 1;
+      v_last_err := SQLERRM;
   END;
 
 BEGIN
@@ -125,6 +132,11 @@ BEGIN
   DBMS_OUTPUT.PUT_LINE('==============================================');
   DBMS_OUTPUT.PUT_LINE(' Workload : &wkld_name');
   DBMS_OUTPUT.PUT_LINE(' sql_id   : &sql_id');
+
+  -- Limpieza idempotente: si se re-ejecuta, elimina restos previos.
+  -- Primero la tarea (libera el link) y luego el workload.
+  BEGIN DBMS_ADVISOR.DELETE_TASK(v_task_name);     EXCEPTION WHEN OTHERS THEN NULL; END;
+  BEGIN DBMS_ADVISOR.DELETE_SQLWKLD(v_wkld_name);  EXCEPTION WHEN OTHERS THEN NULL; END;
 
   DBMS_ADVISOR.CREATE_SQLWKLD(workload_name => v_wkld_name);
   DBMS_OUTPUT.PUT_LINE(' Workload creado.');
@@ -188,6 +200,12 @@ BEGIN
 
   DBMS_OUTPUT.PUT_LINE('----------------------------------------------');
   DBMS_OUTPUT.PUT_LINE(' Total SQLs en workload: ' || v_stmt_count);
+
+  IF v_skipped > 0 THEN
+    DBMS_OUTPUT.PUT_LINE(' SQLs descartados      : ' || v_skipped ||
+                         ' (DML/DDL/no parseables)');
+    DBMS_OUTPUT.PUT_LINE(' Ultimo motivo         : ' || v_last_err);
+  END IF;
 
   IF v_stmt_count = 0 THEN
     DBMS_OUTPUT.PUT_LINE(' ERROR: Workload vacio. Verifica cursor cache.');
