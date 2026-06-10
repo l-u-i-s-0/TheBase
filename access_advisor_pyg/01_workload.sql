@@ -73,6 +73,10 @@ DECLARE
     'PYGREGACTIVIDAD'
   );
 
+  -- Variables para parametros IN OUT de DBMS_ADVISOR
+  -- (no se puede pasar un literal '&...' a un parametro IN OUT)
+  v_wkld_name  VARCHAR2(100)   := '&wkld_name';
+
   v_stmt_count PLS_INTEGER := 0;
   v_in_list    VARCHAR2(32767);
   v_dyn_sql    VARCHAR2(32767);
@@ -105,7 +109,7 @@ DECLARE
   ) IS
   BEGIN
     DBMS_ADVISOR.ADD_SQLWKLD_STATEMENT(
-      workload_name  => '&wkld_name',
+      workload_name  => v_wkld_name,
       module         => 'ACC_ADV_PYG',
       action         => p_action,
       cpu_time       => NVL(p_cpu,     0),
@@ -129,7 +133,7 @@ BEGIN
   DBMS_OUTPUT.PUT_LINE(' Workload : &wkld_name');
   DBMS_OUTPUT.PUT_LINE(' sql_id   : &sql_id');
 
-  DBMS_ADVISOR.CREATE_SQLWKLD(workload_name => '&wkld_name');
+  DBMS_ADVISOR.CREATE_SQLWKLD(workload_name => v_wkld_name);
   DBMS_OUTPUT.PUT_LINE(' Workload creado.');
 
   -- A) SQL principal por sql_id
@@ -185,7 +189,7 @@ BEGIN
 
   IF v_stmt_count = 0 THEN
     DBMS_OUTPUT.PUT_LINE(' ERROR: Workload vacio. Verifica cursor cache.');
-    DBMS_ADVISOR.DELETE_SQLWKLD(workload_name => '&wkld_name');
+    DBMS_ADVISOR.DELETE_SQLWKLD(workload_name => v_wkld_name);
     RETURN;
   END IF;
 
