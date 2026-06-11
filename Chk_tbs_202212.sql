@@ -35,3 +35,15 @@ WHERE tablespace_name IN (
 'TBHIS_202212','TBOUT_202212','TBSRD_202212','TBCGB_202212','TBCPT_202212','TBDAT_202212','TBRDM_202212','TBESG_202212'
 )
 ORDER BY tablespace_name, table_owner, table_name;
+
+-- Check 4: Tablas con particiones repartidas entre los tablespaces a borrar y otros (ORA-14404)
+SELECT DISTINCT p.table_owner, p.table_name, p.tablespace_name AS ts_a_borrar, p2.tablespace_name AS ts_externo
+FROM dba_tab_partitions p
+JOIN dba_tab_partitions p2 ON p2.table_owner = p.table_owner AND p2.table_name = p.table_name
+WHERE p.tablespace_name IN (
+'TBHIS_202212','TBOUT_202212','TBSRD_202212','TBCGB_202212','TBCPT_202212','TBDAT_202212','TBRDM_202212','TBESG_202212'
+)
+  AND p2.tablespace_name NOT IN (
+'TBHIS_202212','TBOUT_202212','TBSRD_202212','TBCGB_202212','TBCPT_202212','TBDAT_202212','TBRDM_202212','TBESG_202212'
+)
+ORDER BY p.table_owner, p.table_name;
