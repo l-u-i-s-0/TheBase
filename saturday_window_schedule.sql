@@ -1,13 +1,12 @@
--- Saltarse SOLO la apertura del sabado 13-jun-2026.
--- Se mueve la fecha de referencia (START_DATE) al dia siguiente de ese sabado.
--- El scheduler recalcula la proxima apertura como el primer sabado que cumple
--- el REPEAT_INTERVAL a partir de esa fecha => sabado 20-jun-2026.
--- Las aperturas posteriores siguen su cadencia semanal normal.
+-- Saltarse SOLO la apertura del sabado 13-jun-2026 01:00 (Europe/Vienna).
+-- Se fija START_DATE exactamente al siguiente sabado deseado: 20-jun-2026 01:00.
+-- La primera apertura valida pasa a ser ese instante; las posteriores siguen
+-- la cadencia semanal normal del REPEAT_INTERVAL.
 BEGIN
   DBMS_SCHEDULER.SET_ATTRIBUTE(
     name      => 'SATURDAY_WINDOW',
     attribute => 'START_DATE',
-    value     => TIMESTAMP '2026-06-14 00:00:00'
+    value     => TIMESTAMP '2026-06-20 01:00:00 Europe/Vienna'
   );
 END;
 /
