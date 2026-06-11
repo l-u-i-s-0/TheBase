@@ -18,11 +18,12 @@ WHERE tablespace_name IN (
 ORDER BY tablespace_name, owner, segment_name;
 
 -- Check 2: Constraints cruzadas con otros tablespaces
-SELECT c.owner, c.constraint_name, c.table_name, s.tablespace_name
+SELECT c.owner, c.constraint_name, c.table_name, t.tablespace_name
 FROM dba_constraints c
-JOIN dba_segments s ON s.owner = c.owner AND s.segment_name = c.table_name
+JOIN dba_tables t ON t.owner = c.owner AND t.table_name = c.table_name
 WHERE c.status = 'ENABLED'
+  AND c.constraint_type = 'R'
   AND c.r_owner IN (
-    SELECT owner FROM dba_segments
+    SELECT owner FROM dba_tables
     WHERE tablespace_name IN ('TBHIS_202212','TBOUT_202212','TBSRD_202212','TBCGB_202212','TBCPT_202212','TBDAT_202212','TBRDM_202212','TBESG_202212'))
-ORDER BY s.tablespace_name, c.owner, c.table_name;
+ORDER BY t.tablespace_name, c.owner, c.table_name;
