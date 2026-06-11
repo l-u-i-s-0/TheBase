@@ -27,3 +27,11 @@ WHERE c.status = 'ENABLED'
     SELECT owner FROM dba_tables
     WHERE tablespace_name IN ('TBHIS_202212','TBOUT_202212','TBSRD_202212','TBCGB_202212','TBCPT_202212','TBDAT_202212','TBRDM_202212','TBESG_202212'))
 ORDER BY t.tablespace_name, c.owner, c.table_name;
+
+-- Check 3: Particiones a borrar en los tablespaces
+SELECT tablespace_name, table_owner, table_name, partition_name
+FROM dba_tab_partitions
+WHERE tablespace_name IN (
+'TBHIS_202212','TBOUT_202212','TBSRD_202212','TBCGB_202212','TBCPT_202212','TBDAT_202212','TBRDM_202212','TBESG_202212'
+)
+ORDER BY tablespace_name, table_owner, table_name;
