@@ -8,24 +8,22 @@ SELECT window_name, enabled, next_start_date
 FROM   dba_scheduler_windows
 WHERE  window_name IN ('SATURDAY_WINDOW','SUNDAY_WINDOW','WEEKEND_WINDOW');
 
--- 2. Saltar sabado 13-jun-2026 (proxima apertura => sabado 20-jun-2026)
---    Ajustar hora si difiere de 01:00 en esta instancia.
+-- 2. Saltar sabado 13-jun-2026 (proxima apertura => sabado 20-jun-2026 06:00)
 BEGIN
   DBMS_SCHEDULER.SET_ATTRIBUTE(
     name      => 'SATURDAY_WINDOW',
     attribute => 'START_DATE',
-    value     => TIMESTAMP '2026-06-20 01:00:00 Europe/Vienna'
+    value     => TIMESTAMP '2026-06-20 06:00:00 Europe/Vienna'
   );
 END;
 /
 
--- 3. Saltar domingo 14-jun-2026 (proxima apertura => domingo 21-jun-2026)
---    *** VERIFICAR HORA exacta del SUNDAY_WINDOW en esta instancia antes de ejecutar ***
+-- 3. Saltar domingo 14-jun-2026 (proxima apertura => domingo 21-jun-2026 06:00)
 BEGIN
   DBMS_SCHEDULER.SET_ATTRIBUTE(
     name      => 'SUNDAY_WINDOW',
     attribute => 'START_DATE',
-    value     => TIMESTAMP '2026-06-21 01:00:00 Europe/Vienna'  -- TODO: confirmar hora
+    value     => TIMESTAMP '2026-06-21 06:00:00 Europe/Vienna'
   );
 END;
 /
