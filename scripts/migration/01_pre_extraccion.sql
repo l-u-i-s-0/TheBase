@@ -10,16 +10,20 @@
 --   SQL> @01_pre_extraccion.sql
 --
 -- NOTA SOBRE TABLESPACES:
---   Los DDL se generan SIN cláusulas de tablespace ni storage (SEGMENT_ATTRIBUTES=FALSE).
---   Cada objeto se creará en el tablespace por defecto del usuario en DEV.
---   El informe pre_informe_auditoria.txt incluye los tablespaces usados en PRE
---   para que puedas verificar si necesitas crearlos en DEV o asignar cuotas.
+--   Los DDL incluyen el tablespace real donde reside cada objeto en PRE (TABLESPACE=TRUE).
+--   Si el tablespace no existe en DEV, la creación del objeto fallará.
+--   El script dev_01_usuario_grants.sql incluye una sección [A-TABLESPACES] con la lista
+--   de tablespaces necesarios y las sentencias de cuota para el usuario.
+--   Si un tablespace de PRE no existe en DEV, créalo antes o edita el DDL para
+--   redirigir ese objeto a otro tablespace disponible.
+--   El bloque STORAGE (tamaños iniciales, extents) se elimina para evitar problemas
+--   de espacio físico; Oracle usará los valores por defecto del tablespace destino.
 --
 -- FICHEROS GENERADOS:
 --   pre_informe_NLS.txt          Comparativa NLS — revisar ANTES de continuar
 --   pre_informe_auditoria.txt    Informe completo de permisos, estado y tablespaces
---   dev_01_usuario_grants.sql    Usuario, cuotas, privilegios, roles
---   dev_02_ddl_objetos.sql       DDL de todos los objetos del esquema (sin tablespace)
+--   dev_01_usuario_grants.sql    Tablespaces necesarios, usuario, cuotas, privilegios, roles
+--   dev_02_ddl_objetos.sql       DDL de todos los objetos (tablespace real, sin STORAGE)
 --   dev_03_pre_carga.sql         Deshabilitar triggers y jobs antes de cargar
 --   dev_04_post_carga.sql        Rehabilitar, reajustar secuencias, recompilar
 --   dev_05_validacion.sql        Validación final tras la carga
@@ -237,14 +241,18 @@ PROMPT [OK] Generado: &f_auditoria
 
 
 -- ============================================================================
--- Configurar DBMS_METADATA para DDL limpio SIN tablespace ni storage
--- SEGMENT_ATTRIBUTES=FALSE elimina TABLESPACE, STORAGE, PCTFREE, etc.
--- Los objetos se crearán en el tablespace por defecto del usuario en DEV.
+-- Configurar DBMS_METADATA:
+--   SEGMENT_ATTRIBUTES=TRUE  -> conserva TABLESPACE real de cada objeto
+--   STORAGE=FALSE            -> elimina el bloque STORAGE (tamaños físicos)
+--   TABLESPACE=TRUE          -> incluye cláusula TABLESPACE en el DDL
+-- Así cada objeto se crea en el mismo tablespace que tiene en PRE.
+-- Si ese tablespace no existe en DEV, el script dev_01_usuario_grants.sql
+-- incluye las sentencias necesarias para crearlo o redirigirlo.
 -- ============================================================================
 BEGIN
-    DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'SEGMENT_ATTRIBUTES',FALSE);
+    DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'SEGMENT_ATTRIBUTES',TRUE);
     DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'STORAGE',           FALSE);
-    DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'TABLESPACE',        FALSE);
+    DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'TABLESPACE',        TRUE);
     DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'SQLTERMINATOR',     TRUE);
     DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'PRETTY',            TRUE);
     DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'REF_CONSTRAINTS',   FALSE);
@@ -267,10 +275,39 @@ PROMPT -- PASO 1: ajustar contraseña en la linea CREATE USER antes de ejecutar
 PROMPT -- ==================================================================
 PROMPT
 
-PROMPT -- [A] USUARIO
-PROMPT --     DEFAULT TABLESPACE: tomado de PRE. Cambiarlo si el nombre no existe en DEV.
-PROMPT --     Todos los objetos DDL se crearan en este tablespace (sin clausula TABLESPACE).
-PROMPT --     Verificar que existe en DEV: SELECT tablespace_name FROM dba_tablespaces;
+PROMPT -- [A] TABLESPACES REQUERIDOS EN DEV
+PROMPT --     Los DDL de los objetos incluyen el tablespace real de PRE.
+PROMPT --     Ejecutar primero en DEV: SELECT tablespace_name FROM dba_tablespaces;
+PROMPT --     Si alguno de los siguientes no existe en DEV, crearlo o editar el DDL.
+PROMPT --     Las sentencias de cuota se generan con UNLIMITED; ajustar si es necesario.
+PROMPT
+DECLARE
+  v_owner VARCHAR2(128) := UPPER('&v_schema');
+BEGIN
+  -- Tablespaces de segmentos (tablas, índices, lobs)
+  FOR t IN (
+    SELECT DISTINCT tablespace_name
+    FROM   dba_segments
+    WHERE  owner = v_owner
+      AND  tablespace_name IS NOT NULL
+    UNION
+    -- Tablespace por defecto y temporal del usuario
+    SELECT default_tablespace   FROM dba_users WHERE username = v_owner
+    UNION
+    SELECT temporary_tablespace FROM dba_users WHERE username = v_owner
+    ORDER BY 1
+  ) LOOP
+    DBMS_OUTPUT.PUT_LINE('-- Verificar en DEV: SELECT count(*) FROM dba_tablespaces WHERE tablespace_name='''||t.tablespace_name||''';');
+    DBMS_OUTPUT.PUT_LINE('ALTER USER "'||v_owner||'" QUOTA UNLIMITED ON "'||t.tablespace_name||'";');
+    DBMS_OUTPUT.PUT_LINE('');
+  END LOOP;
+END;
+/
+PROMPT
+
+PROMPT -- [B] USUARIO
+PROMPT --     Ajustar la contrasena antes de ejecutar.
+PROMPT --     DEFAULT TABLESPACE tomado de PRE; cambiarlo si el nombre difiere en DEV.
 PROMPT
 SELECT 'CREATE USER "' || username || '"'
     || ' IDENTIFIED BY "CAMBIAR_PASSWORD_AQUI"'
@@ -283,7 +320,7 @@ SELECT 'ALTER USER "' || username || '" ACCOUNT UNLOCK;'
 FROM   dba_users WHERE username=UPPER('&v_schema');
 PROMPT
 
-PROMPT -- [B] CUOTAS
+PROMPT -- [C] CUOTAS ADICIONALES (las de los tablespaces de objetos ya estan en [A])
 PROMPT
 SELECT 'ALTER USER "' || username || '" QUOTA '
     || CASE WHEN max_bytes=-1 THEN 'UNLIMITED' ELSE TO_CHAR(ROUND(max_bytes/1048576))||'M' END
@@ -291,7 +328,7 @@ SELECT 'ALTER USER "' || username || '" QUOTA '
 FROM   dba_ts_quotas WHERE username=UPPER('&v_schema') ORDER BY 2;
 PROMPT
 
-PROMPT -- [C] PRIVILEGIOS DE SISTEMA
+PROMPT -- [D] PRIVILEGIOS DE SISTEMA
 PROMPT
 SELECT 'GRANT ' || privilege
     || CASE WHEN admin_option='YES' THEN ' WITH ADMIN OPTION' ELSE '' END
@@ -299,7 +336,7 @@ SELECT 'GRANT ' || privilege
 FROM   dba_sys_privs WHERE grantee=UPPER('&v_schema') ORDER BY 1;
 PROMPT
 
-PROMPT -- [D] ROLES
+PROMPT -- [E] ROLES
 PROMPT
 SELECT 'GRANT "' || granted_role || '"'
     || CASE WHEN admin_option='YES' THEN ' WITH ADMIN OPTION' ELSE '' END
@@ -307,7 +344,7 @@ SELECT 'GRANT "' || granted_role || '"'
 FROM   dba_role_privs WHERE grantee=UPPER('&v_schema') ORDER BY 1;
 PROMPT
 
-PROMPT -- [E] GRANTS RECIBIDOS DE OTROS ESQUEMAS
+PROMPT -- [F] GRANTS RECIBIDOS DE OTROS ESQUEMAS
 PROMPT --     Verificar que esos esquemas y objetos existen en DEV
 PROMPT
 SELECT 'GRANT ' || privilege
@@ -319,7 +356,7 @@ WHERE  grantee=UPPER('&v_schema') AND owner!=UPPER('&v_schema')
 ORDER BY 1,2,3;
 PROMPT
 
-PROMPT -- [F] GRANTS OTORGADOS A OTROS USUARIOS/ROLES
+PROMPT -- [G] GRANTS OTORGADOS A OTROS USUARIOS/ROLES
 PROMPT
 SELECT 'GRANT ' || privilege
     || ' ON "' || owner || '"."' || table_name || '"'
@@ -330,7 +367,7 @@ WHERE  owner=UPPER('&v_schema') AND grantee!=UPPER('&v_schema')
 ORDER BY 1,2,3;
 PROMPT
 
-PROMPT -- [G] SINONIMOS PUBLICOS
+PROMPT -- [H] SINONIMOS PUBLICOS
 PROMPT
 SELECT 'CREATE OR REPLACE PUBLIC SYNONYM "' || synonym_name || '"'
     || ' FOR "' || table_owner || '"."' || table_name || '"'
@@ -339,7 +376,7 @@ FROM   dba_synonyms
 WHERE  owner='PUBLIC' AND table_owner=UPPER('&v_schema') ORDER BY 1;
 PROMPT
 
-PROMPT -- [H] ACLs DE RED (Oracle 12c+)
+PROMPT -- [I] ACLs DE RED (Oracle 12c+)
 PROMPT --     Verificar hosts accesibles desde DEV antes de habilitar
 PROMPT
 BEGIN
