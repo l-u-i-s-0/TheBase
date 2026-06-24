@@ -23,7 +23,7 @@
 --   pre_informe_NLS.txt          Comparativa NLS — revisar ANTES de continuar
 --   pre_informe_auditoria.txt    Informe completo de permisos, estado y tablespaces
 --   dev_01_usuario_grants.sql    Tablespaces necesarios, usuario, cuotas, privilegios, roles
---   dev_02_ddl_objetos.sql       DDL de todos los objetos (tablespace real, sin STORAGE)
+--   dev_02_ddl_objetos.sql       DDL fiel al origen: tablespace real + STORAGE + COMMENTS + MVIEWs
 --   dev_03_pre_carga.sql         Deshabilitar triggers y jobs antes de cargar
 --   dev_04_post_carga.sql        Rehabilitar, reajustar secuencias, recompilar
 --   dev_05_validacion.sql        Validación final tras la carga
@@ -241,17 +241,17 @@ PROMPT [OK] Generado: &f_auditoria
 
 
 -- ============================================================================
--- Configurar DBMS_METADATA:
---   SEGMENT_ATTRIBUTES=TRUE  -> conserva TABLESPACE real de cada objeto
---   STORAGE=FALSE            -> elimina el bloque STORAGE (tamaños físicos)
---   TABLESPACE=TRUE          -> incluye cláusula TABLESPACE en el DDL
--- Así cada objeto se crea en el mismo tablespace que tiene en PRE.
--- Si ese tablespace no existe en DEV, el script dev_01_usuario_grants.sql
--- incluye las sentencias necesarias para crearlo o redirigirlo.
+-- Configurar DBMS_METADATA para DDL máximamente fiel al origen:
+--   SEGMENT_ATTRIBUTES=TRUE -> conserva TABLESPACE, PCTFREE, INITRANS, LOGGING…
+--   STORAGE=TRUE            -> conserva INITIAL, NEXT, MAXEXTENTS, BUFFER_POOL…
+--   TABLESPACE=TRUE         -> incluye cláusula TABLESPACE en cada objeto
+-- El DDL generado es idéntico al de PRE salvo los nombres de objetos propios.
+-- Si los tamaños de STORAGE no encajan en DEV, edítalos en Notepad++ antes
+-- de ejecutar, o simplemente déjalos: Oracle redondeará al extent mínimo.
 -- ============================================================================
 BEGIN
     DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'SEGMENT_ATTRIBUTES',TRUE);
-    DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'STORAGE',           FALSE);
+    DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'STORAGE',           TRUE);
     DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'TABLESPACE',        TRUE);
     DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'SQLTERMINATOR',     TRUE);
     DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'PRETTY',            TRUE);
@@ -454,6 +454,24 @@ BEGIN
 END;
 /
 
+-- Materialized View Logs (antes que las MVs y las tablas base)
+DECLARE
+  v_ddl CLOB; v_owner VARCHAR2(128):=UPPER('&v_schema');
+BEGIN
+  DBMS_OUTPUT.PUT_LINE('-- === MATERIALIZED VIEW LOGS ==='); DBMS_OUTPUT.PUT_LINE('');
+  FOR r IN (SELECT log_table FROM dba_mview_logs
+            WHERE log_owner=v_owner ORDER BY log_table) LOOP
+    BEGIN
+      -- El log_table es el nombre de la tabla base
+      v_ddl:=DBMS_METADATA.GET_DDL('MATERIALIZED_VIEW_LOG',r.log_table,v_owner);
+      DBMS_OUTPUT.PUT_LINE(v_ddl); DBMS_OUTPUT.PUT_LINE('/'); DBMS_OUTPUT.PUT_LINE('');
+    EXCEPTION WHEN OTHERS THEN
+      DBMS_OUTPUT.PUT_LINE('-- ERROR MVIEW LOG '||r.log_table||': '||SQLERRM);
+    END;
+  END LOOP;
+END;
+/
+
 -- Tables
 DECLARE
   v_ddl CLOB; v_owner VARCHAR2(128):=UPPER('&v_schema');
@@ -548,6 +566,24 @@ BEGIN
 END;
 /
 
+-- Materialized Views
+DECLARE
+  v_ddl CLOB; v_owner VARCHAR2(128):=UPPER('&v_schema');
+BEGIN
+  DBMS_OUTPUT.PUT_LINE('-- === MATERIALIZED VIEWS ==='); DBMS_OUTPUT.PUT_LINE('');
+  FOR r IN (SELECT object_name FROM dba_objects
+            WHERE owner=v_owner AND object_type='MATERIALIZED VIEW' AND status='VALID'
+            ORDER BY object_name) LOOP
+    BEGIN
+      v_ddl:=DBMS_METADATA.GET_DDL('MATERIALIZED_VIEW',r.object_name,v_owner);
+      DBMS_OUTPUT.PUT_LINE(v_ddl); DBMS_OUTPUT.PUT_LINE('/'); DBMS_OUTPUT.PUT_LINE('');
+    EXCEPTION WHEN OTHERS THEN
+      DBMS_OUTPUT.PUT_LINE('-- ERROR MATERIALIZED VIEW '||r.object_name||': '||SQLERRM);
+    END;
+  END LOOP;
+END;
+/
+
 -- Views
 DECLARE
   v_ddl CLOB; v_owner VARCHAR2(128):=UPPER('&v_schema');
@@ -620,6 +656,39 @@ BEGIN
       DBMS_OUTPUT.PUT_LINE(v_ddl); DBMS_OUTPUT.PUT_LINE('/'); DBMS_OUTPUT.PUT_LINE('');
     EXCEPTION WHEN OTHERS THEN
       DBMS_OUTPUT.PUT_LINE('-- ERROR DB_LINK '||r.object_name||': '||SQLERRM);
+    END;
+  END LOOP;
+END;
+/
+
+-- Comments (tabla y columna)
+DECLARE
+  v_ddl CLOB; v_owner VARCHAR2(128):=UPPER('&v_schema');
+BEGIN
+  DBMS_OUTPUT.PUT_LINE('-- === COMMENTS (TABLAS Y COLUMNAS) ==='); DBMS_OUTPUT.PUT_LINE('');
+  FOR r IN (SELECT DISTINCT table_name FROM dba_tab_comments
+            WHERE owner=v_owner AND comments IS NOT NULL
+            ORDER BY table_name) LOOP
+    BEGIN
+      v_ddl:=DBMS_METADATA.GET_DEPENDENT_DDL('COMMENT',r.table_name,v_owner);
+      IF v_ddl IS NOT NULL THEN
+        DBMS_OUTPUT.PUT_LINE(v_ddl); DBMS_OUTPUT.PUT_LINE('/'); DBMS_OUTPUT.PUT_LINE('');
+      END IF;
+    EXCEPTION WHEN OTHERS THEN NULL;
+    END;
+  END LOOP;
+  -- Columnas sin comment de tabla pero con comment de columna
+  FOR r IN (SELECT DISTINCT table_name FROM dba_col_comments
+            WHERE owner=v_owner AND comments IS NOT NULL
+            AND table_name NOT IN (SELECT table_name FROM dba_tab_comments
+                                   WHERE owner=v_owner AND comments IS NOT NULL)
+            ORDER BY table_name) LOOP
+    BEGIN
+      v_ddl:=DBMS_METADATA.GET_DEPENDENT_DDL('COMMENT',r.table_name,v_owner);
+      IF v_ddl IS NOT NULL THEN
+        DBMS_OUTPUT.PUT_LINE(v_ddl); DBMS_OUTPUT.PUT_LINE('/'); DBMS_OUTPUT.PUT_LINE('');
+      END IF;
+    EXCEPTION WHEN OTHERS THEN NULL;
     END;
   END LOOP;
 END;
