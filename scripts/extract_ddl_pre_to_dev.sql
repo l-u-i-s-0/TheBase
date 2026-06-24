@@ -4,11 +4,13 @@
 -- para recrearlos en DEV.
 --
 -- INSTRUCCIONES DE USO:
---   1. Conectarse a la base de datos PRE como DBA o con privilegios de EXECUTE
---      sobre DBMS_METADATA y SELECT sobre DBA_OBJECTS.
+--   1. Conectarse a la base de datos PRE como SYSDBA (autenticación SO):
+--         sqlplus / as sysdba
+--      Si la BD es remota indicar el servicio:
+--         sqlplus /@PRE as sysdba
 --   2. Ajustar la variable v_schema con el nombre del esquema origen.
---   3. Ejecutar con SQL*Plus o SQLcl:
---         sqlplus dba_user/pass@PRE @extract_ddl_pre_to_dev.sql
+--   3. Ejecutar el script desde SQL*Plus:
+--         SQL> @extract_ddl_pre_to_dev.sql
 --   4. El spool genera el fichero 'ddl_dev_<SCHEMA>.sql' listo para ejecutar en DEV.
 -- =============================================================================
 
@@ -439,5 +441,6 @@ SET ECHO      OFF
 
 PROMPT
 PROMPT >>> Script generado en: &v_output_file
-PROMPT >>> Ejecutar en DEV: sqlplus &v_schema/pass@DEV @&v_output_file
+PROMPT >>> Ejecutar en DEV: sqlplus / as sysdba  (o /@DEV as sysdba si es remota)
+PROMPT >>>   SQL> @&v_output_file
 PROMPT
