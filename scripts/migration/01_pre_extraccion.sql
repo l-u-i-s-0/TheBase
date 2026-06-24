@@ -6,22 +6,26 @@
 -- USO:
 --   sqlplus / as sysdba          (local)
 --   sqlplus /@PRE as sysdba      (remota)
---   SQL> DEFINE v_schema     = 'MI_ESQUEMA'
---   SQL> DEFINE v_tablespace = 'USERS'
+--   SQL> DEFINE v_schema = 'MI_ESQUEMA'
 --   SQL> @01_pre_extraccion.sql
+--
+-- NOTA SOBRE TABLESPACES:
+--   Los DDL se generan SIN cláusulas de tablespace ni storage (SEGMENT_ATTRIBUTES=FALSE).
+--   Cada objeto se creará en el tablespace por defecto del usuario en DEV.
+--   El informe pre_informe_auditoria.txt incluye los tablespaces usados en PRE
+--   para que puedas verificar si necesitas crearlos en DEV o asignar cuotas.
 --
 -- FICHEROS GENERADOS:
 --   pre_informe_NLS.txt          Comparativa NLS — revisar ANTES de continuar
---   pre_informe_auditoria.txt    Informe completo de permisos y estado
+--   pre_informe_auditoria.txt    Informe completo de permisos, estado y tablespaces
 --   dev_01_usuario_grants.sql    Usuario, cuotas, privilegios, roles
---   dev_02_ddl_objetos.sql       DDL de todos los objetos del esquema
+--   dev_02_ddl_objetos.sql       DDL de todos los objetos del esquema (sin tablespace)
 --   dev_03_pre_carga.sql         Deshabilitar triggers y jobs antes de cargar
 --   dev_04_post_carga.sql        Rehabilitar, reajustar secuencias, recompilar
 --   dev_05_validacion.sql        Validación final tras la carga
 -- =============================================================================
 
-DEFINE v_schema      = 'NOMBRE_ESQUEMA'   -- <<<< CAMBIAR
-DEFINE v_tablespace  = 'USERS'            -- <<<< tablespace destino en DEV
+DEFINE v_schema = 'NOMBRE_ESQUEMA'   -- <<<< UNICO PARAMETRO A CAMBIAR
 
 -- Derivados (no tocar)
 DEFINE f_nls         = 'pre_informe_NLS.txt'
@@ -203,7 +207,24 @@ FROM   dba_tab_privs tp JOIN dba_directories d ON d.directory_name=tp.table_name
 WHERE  tp.grantee=UPPER('&v_schema') ORDER BY 1;
 
 PROMPT
-PROMPT --- [18] RESUMEN DE OBJETOS POR TIPO ----------------------------
+PROMPT --- [18] TABLESPACES USADOS POR OBJETOS DEL ESQUEMA EN PRE ------
+PROMPT --     El DDL se genera SIN tablespace (SEGMENT_ATTRIBUTES=FALSE)
+PROMPT --     Los objetos iran al tablespace por defecto del usuario en DEV.
+PROMPT --     Asegurate de que ese tablespace tenga cuota suficiente.
+PROMPT --     Si necesitas que objetos concretos vayan a otro tablespace,
+PROMPT --     edita manualmente el DDL generado o usa ALTER INDEX ... REBUILD.
+PROMPT
+SELECT segment_type AS tipo,
+       tablespace_name,
+       COUNT(*)           AS num_objetos,
+       ROUND(SUM(bytes)/1048576,1) AS mb_usado
+FROM   dba_segments
+WHERE  owner = UPPER('&v_schema')
+GROUP BY segment_type, tablespace_name
+ORDER BY segment_type, tablespace_name;
+
+PROMPT
+PROMPT --- [19] RESUMEN DE OBJETOS POR TIPO ----------------------------
 SELECT object_type,
        COUNT(*) total,
        SUM(CASE WHEN status='VALID'   THEN 1 ELSE 0 END) validos,
@@ -216,12 +237,14 @@ PROMPT [OK] Generado: &f_auditoria
 
 
 -- ============================================================================
--- Configurar DBMS_METADATA para DDL limpio
+-- Configurar DBMS_METADATA para DDL limpio SIN tablespace ni storage
+-- SEGMENT_ATTRIBUTES=FALSE elimina TABLESPACE, STORAGE, PCTFREE, etc.
+-- Los objetos se crearán en el tablespace por defecto del usuario en DEV.
 -- ============================================================================
 BEGIN
-    DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'STORAGE',          FALSE);
-    DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'TABLESPACE',        TRUE);
     DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'SEGMENT_ATTRIBUTES',FALSE);
+    DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'STORAGE',           FALSE);
+    DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'TABLESPACE',        FALSE);
     DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'SQLTERMINATOR',     TRUE);
     DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'PRETTY',            TRUE);
     DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'REF_CONSTRAINTS',   FALSE);
@@ -245,6 +268,9 @@ PROMPT -- ==================================================================
 PROMPT
 
 PROMPT -- [A] USUARIO
+PROMPT --     DEFAULT TABLESPACE: tomado de PRE. Cambiarlo si el nombre no existe en DEV.
+PROMPT --     Todos los objetos DDL se crearan en este tablespace (sin clausula TABLESPACE).
+PROMPT --     Verificar que existe en DEV: SELECT tablespace_name FROM dba_tablespaces;
 PROMPT
 SELECT 'CREATE USER "' || username || '"'
     || ' IDENTIFIED BY "CAMBIAR_PASSWORD_AQUI"'
@@ -402,7 +428,6 @@ BEGIN
             AND object_name NOT LIKE 'BIN$%' ORDER BY object_name) LOOP
     BEGIN
       v_ddl:=DBMS_METADATA.GET_DDL('TABLE',r.object_name,v_owner);
-      v_ddl:=REGEXP_REPLACE(v_ddl,'TABLESPACE\s+"[^"]+"','TABLESPACE "&v_tablespace"',1,0,'i');
       DBMS_OUTPUT.PUT_LINE(v_ddl); DBMS_OUTPUT.PUT_LINE('/'); DBMS_OUTPUT.PUT_LINE('');
     EXCEPTION WHEN OTHERS THEN
       DBMS_OUTPUT.PUT_LINE('-- ERROR TABLE '||r.object_name||': '||SQLERRM);
@@ -424,7 +449,6 @@ BEGIN
             ORDER BY i.index_name) LOOP
     BEGIN
       v_ddl:=DBMS_METADATA.GET_DDL('INDEX',r.index_name,v_owner);
-      v_ddl:=REGEXP_REPLACE(v_ddl,'TABLESPACE\s+"[^"]+"','TABLESPACE "&v_tablespace"',1,0,'i');
       DBMS_OUTPUT.PUT_LINE(v_ddl); DBMS_OUTPUT.PUT_LINE('/'); DBMS_OUTPUT.PUT_LINE('');
     EXCEPTION WHEN OTHERS THEN
       DBMS_OUTPUT.PUT_LINE('-- ERROR INDEX '||r.index_name||': '||SQLERRM);
