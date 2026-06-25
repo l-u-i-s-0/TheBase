@@ -171,17 +171,15 @@ PROMPT   WHERE  owner = v_schema AND object_type = 'TABLE';
 PROMPT
 PROMPT   IF v_tablas > 0 THEN
 PROMPT     DBMS_OUTPUT.PUT_LINE('');
-PROMPT     DBMS_OUTPUT.PUT_LINE('*** ATENCION: el esquema '||v_schema||' ya tiene '||v_tablas||' tabla(s) en DEV.');
-PROMPT     DBMS_OUTPUT.PUT_LINE('*** Revisar antes de continuar. Si quieres reemplazarlo:');
-PROMPT     DBMS_OUTPUT.PUT_LINE('***   DROP USER "'||v_schema||'" CASCADE;');
-PROMPT     DBMS_OUTPUT.PUT_LINE('*** y vuelve a ejecutar este script.');
+PROMPT     DBMS_OUTPUT.PUT_LINE('*** El esquema '||v_schema||' ya contiene '||v_tablas||' tabla(s) en este entorno.');
+PROMPT     DBMS_OUTPUT.PUT_LINE('*** Es necesario eliminar los objetos existentes antes de continuar.');
+PROMPT     DBMS_OUTPUT.PUT_LINE('*** Script detenido.');
 PROMPT     DBMS_OUTPUT.PUT_LINE('');
-PROMPT     RAISE_APPLICATION_ERROR(-20001,
-PROMPT       'Esquema '||v_schema||' no esta vacio en DEV ('||v_tablas||' tablas). Script detenido.');
+PROMPT     RAISE_APPLICATION_ERROR(-20001, 'El esquema '||v_schema||' no esta vacio. Script detenido.');
 PROMPT   ELSIF v_usuario > 0 THEN
-PROMPT     DBMS_OUTPUT.PUT_LINE('INFO: El usuario '||v_schema||' ya existe en DEV pero no tiene tablas. Continuando...');
+PROMPT     DBMS_OUTPUT.PUT_LINE('El usuario '||v_schema||' ya existe pero no tiene tablas. Continuando...');
 PROMPT   ELSE
-PROMPT     DBMS_OUTPUT.PUT_LINE('OK: DEV limpio para el esquema '||v_schema||'. Continuando...');
+PROMPT     DBMS_OUTPUT.PUT_LINE('Entorno limpio para el esquema '||v_schema||'. Continuando...');
 PROMPT   END IF;
 PROMPT END;
 PROMPT /
