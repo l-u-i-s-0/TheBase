@@ -156,6 +156,35 @@ PROMPT
 -- --------------------------------------------------------------------------
 -- [1] TABLESPACES: verificar que existen y dar cuota
 -- --------------------------------------------------------------------------
+PROMPT -- ================================================================
+PROMPT -- [0] ESTADO ACTUAL EN DEV — lo que ya existe antes de ejecutar
+PROMPT --     Solo muestra filas si hay algo. Si esta vacio, DEV esta limpio.
+PROMPT -- ================================================================
+PROMPT
+PROMPT -- Usuario:
+PROMPT SELECT username, account_status, created FROM dba_users WHERE username = '&v_schema';
+PROMPT
+PROMPT -- Objetos existentes:
+PROMPT SELECT object_type, COUNT(*) total FROM dba_objects
+PROMPT WHERE  owner = '&v_schema' GROUP BY object_type ORDER BY 1;
+PROMPT
+PROMPT -- Privilegios de sistema ya concedidos:
+PROMPT SELECT privilege FROM dba_sys_privs WHERE grantee = '&v_schema' ORDER BY 1;
+PROMPT
+PROMPT -- Roles ya concedidos:
+PROMPT SELECT granted_role FROM dba_role_privs WHERE grantee = '&v_schema' ORDER BY 1;
+PROMPT
+PROMPT -- Cuotas ya asignadas:
+PROMPT SELECT tablespace_name,
+PROMPT        CASE WHEN max_bytes=-1 THEN 'UNLIMITED' ELSE TO_CHAR(ROUND(max_bytes/1048576,1))||' MB' END cuota
+PROMPT FROM   dba_ts_quotas WHERE username = '&v_schema' ORDER BY 1;
+PROMPT
+PROMPT -- ================================================================
+PROMPT -- Si el usuario ya existe arriba, comentar el bloque [2] CREATE USER
+PROMPT -- Si ya hay objetos, revisar si hay conflictos antes de continuar
+PROMPT -- ================================================================
+PROMPT
+
 PROMPT -- [1] TABLESPACES — verificar que existen en DEV y asignar cuota
 PROMPT --     Si alguno devuelve 0 en la consulta siguiente: crearlo antes de continuar
 PROMPT
