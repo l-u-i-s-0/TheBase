@@ -10,7 +10,7 @@
 --   dev_2_despues_carga.sql  Ejecutar en DEV despues de la carga de datos
 -- =============================================================================
 
-DEFINE v_schema = 'JOBPROCESSOR'
+DEFINE v_schema = 'JOBPROCESOR'
 
 SET SERVEROUTPUT ON SIZE UNLIMITED
 SET LONG         2000000
