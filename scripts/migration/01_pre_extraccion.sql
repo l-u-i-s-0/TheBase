@@ -1,55 +1,25 @@
 -- =============================================================================
--- 01_pre_extraccion.sql
--- PASO 1 DE 3 — Ejecutar en PRE como SYSDBA
--- Audita el esquema y genera todos los ficheros necesarios para DEV.
+-- 01_pre_extraccion.sql  —  Ejecutar en PRE como SYSDBA
 --
--- USO:
---   sqlplus / as sysdba          (local)
---   sqlplus /@PRE as sysdba      (remota)
---   SQL> DEFINE v_schema = 'MI_ESQUEMA'
+--   sqlplus / as sysdba
 --   SQL> @01_pre_extraccion.sql
 --
--- NOTA SOBRE TABLESPACES:
---   Los DDL incluyen el tablespace real donde reside cada objeto en PRE (TABLESPACE=TRUE).
---   Si el tablespace no existe en DEV, la creación del objeto fallará.
---   El script dev_01_usuario_grants.sql incluye una sección [A-TABLESPACES] con la lista
---   de tablespaces necesarios y las sentencias de cuota para el usuario.
---   Si un tablespace de PRE no existe en DEV, créalo antes o edita el DDL para
---   redirigir ese objeto a otro tablespace disponible.
---   El bloque STORAGE (tamaños iniciales, extents) se elimina para evitar problemas
---   de espacio físico; Oracle usará los valores por defecto del tablespace destino.
---
--- FICHEROS GENERADOS:
---   pre_informe_NLS.txt          Comparativa NLS — revisar ANTES de continuar
---   pre_informe_auditoria.txt    Informe completo de permisos, estado y tablespaces
---   dev_01_usuario_grants.sql    Tablespaces necesarios, usuario, cuotas, privilegios, roles
---   dev_02_ddl_objetos.sql       DDL fiel al origen: tablespace real + STORAGE + COMMENTS + MVIEWs
---   dev_03_pre_carga.sql         Deshabilitar triggers y jobs antes de cargar
---   dev_04_post_carga.sql        Rehabilitar, reajustar secuencias, recompilar
---   dev_05_validacion.sql        Validación final tras la carga
+-- Genera 3 ficheros:
+--   informe_pre.txt          Revisar antes de ejecutar nada en DEV
+--   dev_1_antes_carga.sql    Ejecutar en DEV antes de la carga de datos
+--   dev_2_despues_carga.sql  Ejecutar en DEV despues de la carga de datos
 -- =============================================================================
 
 DEFINE v_schema = 'JOBPROCESSOR'
 
--- Derivados (no tocar)
-DEFINE f_nls         = 'pre_informe_NLS.txt'
-DEFINE f_auditoria   = 'pre_informe_auditoria.txt'
-DEFINE f_grants      = 'dev_01_usuario_grants.sql'
-DEFINE f_ddl         = 'dev_02_ddl_objetos.sql'
-DEFINE f_precarga    = 'dev_03_pre_carga.sql'
-DEFINE f_postcarga   = 'dev_04_post_carga.sql'
-DEFINE f_validacion  = 'dev_05_validacion.sql'
-
 SET SERVEROUTPUT ON SIZE UNLIMITED
-SET LONG        2000000
+SET LONG         2000000
 SET LONGCHUNKSIZE 32767
-SET LINESIZE    200
-SET TRIMSPOOL   ON
-SET FEEDBACK    OFF
-SET VERIFY      OFF
-SET HEADING     ON
-SET PAGESIZE    50
-SET ECHO        OFF
+SET LINESIZE     200
+SET TRIMSPOOL    ON
+SET FEEDBACK     OFF
+SET VERIFY       OFF
+SET ECHO         OFF
 
 PROMPT
 PROMPT ============================================================
@@ -60,194 +30,94 @@ PROMPT
 
 
 -- ============================================================================
--- FICHERO 1: INFORME NLS  (revisar antes de cualquier otra cosa)
+-- FICHERO 1: INFORME  (leer antes de tocar nada en DEV)
 -- ============================================================================
-SPOOL &f_nls
+SET HEADING ON
+SET PAGESIZE 50
+
+SPOOL informe_pre.txt
+
 PROMPT ============================================================
-PROMPT  PARAMETROS NLS - PRE
-PROMPT  Comparar con DEV antes de continuar la migración
+PROMPT  INFORME PRE - ESQUEMA: &v_schema
+SELECT ' Fecha: ' || TO_CHAR(SYSDATE,'DD/MM/YYYY HH24:MI:SS') FROM DUAL;
+PROMPT  Revisar TODO antes de ejecutar en DEV
 PROMPT ============================================================
-SELECT parameter, value
-FROM   nls_database_parameters
-WHERE  parameter IN (
-    'NLS_CHARACTERSET','NLS_NCHAR_CHARACTERSET',
-    'NLS_DATE_FORMAT','NLS_DATE_LANGUAGE',
-    'NLS_NUMERIC_CHARACTERS','NLS_LENGTH_SEMANTICS',
-    'NLS_TERRITORY','NLS_LANGUAGE'
-)
+
+PROMPT
+PROMPT --- [1] NLS — comparar con DEV (si NLS_CHARACTERSET difiere: PARAR) ---
+SELECT parameter, value FROM nls_database_parameters
+WHERE  parameter IN ('NLS_CHARACTERSET','NLS_NCHAR_CHARACTERSET','NLS_DATE_FORMAT',
+                     'NLS_NUMERIC_CHARACTERS','NLS_LENGTH_SEMANTICS')
 ORDER BY parameter;
 
 PROMPT
-PROMPT *** ACCION REQUERIDA: ejecutar esta misma query en DEV y comparar.
-PROMPT *** Si NLS_CHARACTERSET difiere -> PARAR. Es un cambio de instancia.
-PROMPT *** Si NLS_DATE_FORMAT difiere  -> ajustar formato en la carga de datos.
-SPOOL OFF
-PROMPT [OK] Generado: &f_nls
-
-
--- ============================================================================
--- FICHERO 2: INFORME DE AUDITORIA COMPLETA
--- ============================================================================
-SPOOL &f_auditoria
-
-PROMPT ============================================================
-PROMPT  INFORME DE AUDITORIA - ESQUEMA: &v_schema
-SELECT ' Fecha: ' || TO_CHAR(SYSDATE,'DD/MM/YYYY HH24:MI:SS') FROM DUAL;
-PROMPT ============================================================
-
-PROMPT
-PROMPT --- [1] DEFINICION DEL USUARIO ------------------------------------
+PROMPT --- [2] USUARIO ---------------------------------------------------
 SELECT username, account_status, default_tablespace,
        temporary_tablespace, profile, created
 FROM   dba_users WHERE username = UPPER('&v_schema');
 
 PROMPT
-PROMPT --- [2] CUOTAS DE TABLESPACE (sin cuota = ORA-01536 en INSERT) ---
-SELECT tablespace_name,
-       CASE WHEN max_bytes=-1 THEN 'UNLIMITED'
-            ELSE TO_CHAR(ROUND(max_bytes/1048576,2))||' MB' END cuota_max,
-       ROUND(bytes/1048576,2)||' MB' usado
-FROM   dba_ts_quotas WHERE username = UPPER('&v_schema') ORDER BY 1;
+PROMPT --- [3] TABLESPACES usados (deben existir en DEV) ----------------
+SELECT segment_type, tablespace_name,
+       COUNT(*) objetos, ROUND(SUM(bytes)/1048576,1) mb_usado
+FROM   dba_segments WHERE owner = UPPER('&v_schema')
+GROUP BY segment_type, tablespace_name ORDER BY segment_type, tablespace_name;
 
 PROMPT
-PROMPT --- [3] PRIVILEGIOS DE SISTEMA ------------------------------------
-SELECT privilege, admin_option FROM dba_sys_privs
-WHERE  grantee = UPPER('&v_schema') ORDER BY 1;
+PROMPT --- [4] OBJETOS INVALIDOS en PRE (resolver antes de migrar) ------
+SELECT object_type, object_name, last_ddl_time FROM dba_objects
+WHERE  owner = UPPER('&v_schema') AND status = 'INVALID' ORDER BY 1, 2;
 
 PROMPT
-PROMPT --- [4] ROLES CONCEDIDOS ------------------------------------------
-SELECT granted_role, admin_option, default_role FROM dba_role_privs
-WHERE  grantee = UPPER('&v_schema') ORDER BY 1;
+PROMPT --- [5] DEPENDENCIAS EXTERNAS (deben existir en DEV) -------------
+PROMPT  -- Grants recibidos de otros esquemas:
+SELECT owner AS esquema_origen, table_name, privilege FROM dba_tab_privs
+WHERE  grantee = UPPER('&v_schema') AND owner != UPPER('&v_schema') ORDER BY 1, 2;
+PROMPT  -- Sinonimos privados hacia otros esquemas:
+SELECT synonym_name, table_owner, table_name, db_link FROM dba_synonyms
+WHERE  owner = UPPER('&v_schema') AND table_owner != UPPER('&v_schema') ORDER BY 2, 1;
 
 PROMPT
-PROMPT --- [5] GRANTS RECIBIDOS DE OTROS ESQUEMAS -----------------------
-SELECT owner AS esquema_origen, table_name AS objeto,
-       privilege, grantable FROM dba_tab_privs
-WHERE  grantee = UPPER('&v_schema') AND owner != UPPER('&v_schema')
-ORDER BY 1,2,3;
-
-PROMPT
-PROMPT --- [6] GRANTS OTORGADOS A OTROS ----------------------------------
-SELECT grantee, table_name AS objeto, privilege, grantable FROM dba_tab_privs
-WHERE  owner = UPPER('&v_schema') AND grantee != UPPER('&v_schema')
-ORDER BY 1,2,3;
-
-PROMPT
-PROMPT --- [7] SINONIMOS PUBLICOS que apuntan a este esquema -------------
-SELECT synonym_name, table_name, db_link FROM dba_synonyms
-WHERE  owner='PUBLIC' AND table_owner=UPPER('&v_schema') ORDER BY 1;
-
-PROMPT
-PROMPT --- [8] SINONIMOS PRIVADOS hacia objetos EXTERNOS ----------------
-SELECT synonym_name, table_owner AS destino, table_name, db_link
-FROM   dba_synonyms
-WHERE  owner=UPPER('&v_schema') AND table_owner!=UPPER('&v_schema') ORDER BY 2,1;
-
-PROMPT
-PROMPT --- [9] DATABASE LINKS -------------------------------------------
+PROMPT --- [6] DATABASE LINKS (verificar accesibilidad desde DEV) --------
 SELECT db_link, username, host FROM dba_db_links
-WHERE  owner=UPPER('&v_schema') ORDER BY 1;
+WHERE  owner = UPPER('&v_schema') ORDER BY 1;
 
 PROMPT
-PROMPT --- [10] PERFIL DEL USUARIO (limites que pueden cortar la carga) -
+PROMPT --- [7] PERFIL (limites que pueden cortar sesiones largas de carga)
 SELECT p.resource_name, p.limit FROM dba_profiles p
-JOIN   dba_users u ON u.profile=p.profile
-WHERE  u.username=UPPER('&v_schema')
-AND    p.resource_name IN ('SESSIONS_PER_USER','IDLE_TIME','CONNECT_TIME',
-       'CPU_PER_SESSION','LOGICAL_READS_PER_SESSION',
-       'PASSWORD_LIFE_TIME','FAILED_LOGIN_ATTEMPTS')
+JOIN   dba_users u ON u.profile = p.profile
+WHERE  u.username = UPPER('&v_schema')
+AND    p.resource_name IN ('IDLE_TIME','CONNECT_TIME','SESSIONS_PER_USER',
+                           'PASSWORD_LIFE_TIME','FAILED_LOGIN_ATTEMPTS')
 ORDER BY 1;
 
 PROMPT
-PROMPT --- [11] OBJETOS INVALIDOS en PRE (resolver ANTES de migrar) -----
-SELECT object_type, object_name, status, last_ddl_time FROM dba_objects
-WHERE  owner=UPPER('&v_schema') AND status='INVALID' ORDER BY 1,2;
+PROMPT --- [8] TRIGGERS habilitados (se deshabilitaran antes de la carga) -
+SELECT trigger_name, table_name, triggering_event FROM dba_triggers
+WHERE  owner = UPPER('&v_schema') AND status = 'ENABLED' ORDER BY 2, 1;
 
 PROMPT
-PROMPT --- [12] TRIGGERS HABILITADOS ------------------------------------
-SELECT trigger_name, table_name, trigger_type, triggering_event, status
-FROM   dba_triggers WHERE owner=UPPER('&v_schema') AND status='ENABLED'
-ORDER BY 2,1;
+PROMPT --- [9] JOBS activos (se deshabilitaran antes de la carga) ---------
+SELECT job_name, state, repeat_interval FROM dba_scheduler_jobs
+WHERE  owner = UPPER('&v_schema') AND enabled = 'TRUE' ORDER BY 1;
 
 PROMPT
-PROMPT --- [13] JOBS DEL SCHEDULER --------------------------------------
-SELECT job_name, enabled, state, repeat_interval, last_run_date
-FROM   dba_scheduler_jobs WHERE owner=UPPER('&v_schema') ORDER BY 1;
-
-PROMPT
-PROMPT --- [14] DBMS_JOB (legacy) ---------------------------------------
-SELECT job, what, next_date, broken FROM dba_jobs
-WHERE  schema_user=UPPER('&v_schema') ORDER BY 1;
-
-PROMPT
-PROMPT --- [15] ACLs DE RED (UTL_HTTP / UTL_SMTP) ----------------------
-BEGIN
-  -- Oracle 12c+
-  FOR r IN (SELECT host, lower_port, upper_port, principal, privilege, is_grant
-            FROM dba_host_aces WHERE principal=UPPER('&v_schema')) LOOP
-    DBMS_OUTPUT.PUT_LINE(r.host||':'||r.lower_port||'-'||r.upper_port
-                         ||' '||r.privilege||' grant='||r.is_grant);
-  END LOOP;
-EXCEPTION WHEN OTHERS THEN
-  -- Oracle 11g fallback
-  FOR r IN (SELECT a.acl, a.host, p.principal, p.privilege, p.is_grant
-            FROM dba_network_acls a JOIN dba_network_acl_privileges p ON a.acl=p.acl
-            WHERE p.principal=UPPER('&v_schema')) LOOP
-    DBMS_OUTPUT.PUT_LINE(r.host||' '||r.privilege||' grant='||r.is_grant);
-  END LOOP;
-END;
-/
-
-PROMPT
-PROMPT --- [16] SECUENCIAS (valor actual — reajustar tras la carga) -----
-SELECT sequence_name, last_number, min_value, max_value,
-       increment_by, cycle_flag, order_flag, cache_size
-FROM   dba_sequences WHERE sequence_owner=UPPER('&v_schema') ORDER BY 1;
-
-PROMPT
-PROMPT --- [17] DIRECTORY OBJECTS con acceso desde este esquema ---------
-SELECT d.directory_name, d.directory_path, tp.privilege
-FROM   dba_tab_privs tp JOIN dba_directories d ON d.directory_name=tp.table_name
-WHERE  tp.grantee=UPPER('&v_schema') ORDER BY 1;
-
-PROMPT
-PROMPT --- [18] TABLESPACES USADOS POR OBJETOS DEL ESQUEMA EN PRE ------
-PROMPT --     El DDL se genera SIN tablespace (SEGMENT_ATTRIBUTES=FALSE)
-PROMPT --     Los objetos iran al tablespace por defecto del usuario en DEV.
-PROMPT --     Asegurate de que ese tablespace tenga cuota suficiente.
-PROMPT --     Si necesitas que objetos concretos vayan a otro tablespace,
-PROMPT --     edita manualmente el DDL generado o usa ALTER INDEX ... REBUILD.
-PROMPT
-SELECT segment_type AS tipo,
-       tablespace_name,
-       COUNT(*)           AS num_objetos,
-       ROUND(SUM(bytes)/1048576,1) AS mb_usado
-FROM   dba_segments
-WHERE  owner = UPPER('&v_schema')
-GROUP BY segment_type, tablespace_name
-ORDER BY segment_type, tablespace_name;
-
-PROMPT
-PROMPT --- [19] RESUMEN DE OBJETOS POR TIPO ----------------------------
-SELECT object_type,
-       COUNT(*) total,
-       SUM(CASE WHEN status='VALID'   THEN 1 ELSE 0 END) validos,
+PROMPT --- [10] RESUMEN de objetos por tipo --------------------------------
+SELECT object_type, COUNT(*) total,
+       SUM(CASE WHEN status='VALID' THEN 1 ELSE 0 END) validos,
        SUM(CASE WHEN status='INVALID' THEN 1 ELSE 0 END) invalidos
-FROM   dba_objects WHERE owner=UPPER('&v_schema')
+FROM   dba_objects WHERE owner = UPPER('&v_schema')
 GROUP BY object_type ORDER BY 1;
 
 SPOOL OFF
-PROMPT [OK] Generado: &f_auditoria
+PROMPT [OK] informe_pre.txt
 
 
 -- ============================================================================
--- Configurar DBMS_METADATA para DDL máximamente fiel al origen:
---   SEGMENT_ATTRIBUTES=TRUE -> conserva TABLESPACE, PCTFREE, INITRANS, LOGGING…
---   STORAGE=TRUE            -> conserva INITIAL, NEXT, MAXEXTENTS, BUFFER_POOL…
---   TABLESPACE=TRUE         -> incluye cláusula TABLESPACE en cada objeto
--- El DDL generado es idéntico al de PRE salvo los nombres de objetos propios.
--- Si los tamaños de STORAGE no encajan en DEV, edítalos en Notepad++ antes
--- de ejecutar, o simplemente déjalos: Oracle redondeará al extent mínimo.
+-- Configuracion DBMS_METADATA: DDL fiel al origen
+--   SEGMENT_ATTRIBUTES=TRUE  conserva TABLESPACE, PCTFREE, INITRANS, LOGGING
+--   STORAGE=TRUE             conserva INITIAL, NEXT, MAXEXTENTS
+--   TABLESPACE=TRUE          incluye clausula TABLESPACE en cada objeto
 -- ============================================================================
 BEGIN
     DBMS_METADATA.SET_TRANSFORM_PARAM(DBMS_METADATA.SESSION_TRANSFORM,'SEGMENT_ATTRIBUTES',TRUE);
@@ -260,174 +130,180 @@ BEGIN
 END;
 /
 
-SET HEADING   OFF
-SET PAGESIZE  0
+SET HEADING  OFF
+SET PAGESIZE 0
 
 
 -- ============================================================================
--- FICHERO 3: USUARIO + GRANTS + CUOTAS + ROLES + SINONIMOS PUBLICOS
+-- FICHERO 2: DEV — ANTES DE LA CARGA
+-- Contiene: tablespaces/cuotas, usuario, privilegios, DDL de objetos,
+--           deshabilitacion de FKs/triggers/jobs
 -- ============================================================================
-SPOOL &f_grants
+SPOOL dev_1_antes_carga.sql
+
 PROMPT -- ==================================================================
-PROMPT -- dev_01_usuario_grants.sql — Ejecutar en DEV como SYSDBA
+PROMPT -- dev_1_antes_carga.sql
+PROMPT -- Ejecutar en DEV como SYSDBA ANTES de la carga de datos
+PROMPT -- Conexion: sqlplus / as sysdba  o  sqlplus /@DEV as sysdba
 SELECT '-- Generado desde PRE el ' || TO_CHAR(SYSDATE,'DD/MM/YYYY HH24:MI:SS') FROM DUAL;
-PROMPT -- PASO 1: ajustar contraseña en la linea CREATE USER antes de ejecutar
 PROMPT -- ==================================================================
 PROMPT
+PROMPT SET SERVEROUTPUT ON SIZE UNLIMITED
+PROMPT SET FEEDBACK ON
+PROMPT SET ECHO OFF
+PROMPT
 
-PROMPT -- [A] TABLESPACES REQUERIDOS EN DEV
-PROMPT --     Los DDL de los objetos incluyen el tablespace real de PRE.
-PROMPT --     Ejecutar primero en DEV: SELECT tablespace_name FROM dba_tablespaces;
-PROMPT --     Si alguno de los siguientes no existe en DEV, crearlo o editar el DDL.
-PROMPT --     Las sentencias de cuota se generan con UNLIMITED; ajustar si es necesario.
+-- --------------------------------------------------------------------------
+-- [1] TABLESPACES: verificar que existen y dar cuota
+-- --------------------------------------------------------------------------
+PROMPT -- [1] TABLESPACES — verificar que existen en DEV y asignar cuota
+PROMPT --     Si alguno devuelve 0 en la consulta siguiente: crearlo antes de continuar
 PROMPT
 DECLARE
   v_owner VARCHAR2(128) := UPPER('&v_schema');
 BEGIN
-  -- Tablespaces de segmentos (tablas, índices, lobs)
   FOR t IN (
-    SELECT DISTINCT tablespace_name
-    FROM   dba_segments
-    WHERE  owner = v_owner
-      AND  tablespace_name IS NOT NULL
+    SELECT DISTINCT tablespace_name FROM dba_segments WHERE owner = v_owner
     UNION
-    -- Tablespace por defecto y temporal del usuario
     SELECT default_tablespace   FROM dba_users WHERE username = v_owner
     UNION
     SELECT temporary_tablespace FROM dba_users WHERE username = v_owner
     ORDER BY 1
   ) LOOP
-    DBMS_OUTPUT.PUT_LINE('-- Verificar en DEV: SELECT count(*) FROM dba_tablespaces WHERE tablespace_name='''||t.tablespace_name||''';');
-    DBMS_OUTPUT.PUT_LINE('ALTER USER "'||v_owner||'" QUOTA UNLIMITED ON "'||t.tablespace_name||'";');
-    DBMS_OUTPUT.PUT_LINE('');
+    DBMS_OUTPUT.PUT_LINE(
+      'SELECT COUNT(*) "'||t.tablespace_name||' existe en DEV?" FROM dba_tablespaces'
+      ||' WHERE tablespace_name='''||t.tablespace_name||''';'
+    );
   END LOOP;
 END;
 /
 PROMPT
 
-PROMPT -- [B] USUARIO
-PROMPT --     Ajustar la contrasena antes de ejecutar.
-PROMPT --     DEFAULT TABLESPACE tomado de PRE; cambiarlo si el nombre difiere en DEV.
+-- --------------------------------------------------------------------------
+-- [2] USUARIO
+-- --------------------------------------------------------------------------
+PROMPT -- [2] USUARIO — ajustar contrasena antes de ejecutar
 PROMPT
 SELECT 'CREATE USER "' || username || '"'
-    || ' IDENTIFIED BY "CAMBIAR_PASSWORD_AQUI"'
+    || ' IDENTIFIED BY "CAMBIAR_PASSWORD"'
     || ' DEFAULT TABLESPACE "' || default_tablespace || '"'
     || ' TEMPORARY TABLESPACE "' || temporary_tablespace || '"'
     || ' PROFILE "' || profile || '";'
-FROM   dba_users WHERE username=UPPER('&v_schema');
+FROM   dba_users WHERE username = UPPER('&v_schema');
 PROMPT
 SELECT 'ALTER USER "' || username || '" ACCOUNT UNLOCK;'
-FROM   dba_users WHERE username=UPPER('&v_schema');
+FROM   dba_users WHERE username = UPPER('&v_schema');
 PROMPT
 
-PROMPT -- [C] CUOTAS ADICIONALES (las de los tablespaces de objetos ya estan en [A])
+-- --------------------------------------------------------------------------
+-- [3] CUOTAS
+-- --------------------------------------------------------------------------
+PROMPT -- [3] CUOTAS
 PROMPT
-SELECT 'ALTER USER "' || username || '" QUOTA '
-    || CASE WHEN max_bytes=-1 THEN 'UNLIMITED' ELSE TO_CHAR(ROUND(max_bytes/1048576))||'M' END
-    || ' ON "' || tablespace_name || '";'
-FROM   dba_ts_quotas WHERE username=UPPER('&v_schema') ORDER BY 2;
+DECLARE
+  v_owner VARCHAR2(128) := UPPER('&v_schema');
+BEGIN
+  -- Cuota UNLIMITED en todos los tablespaces de segmentos
+  FOR t IN (SELECT DISTINCT tablespace_name FROM dba_segments WHERE owner = v_owner ORDER BY 1) LOOP
+    DBMS_OUTPUT.PUT_LINE('ALTER USER "'||v_owner||'" QUOTA UNLIMITED ON "'||t.tablespace_name||'";');
+  END LOOP;
+  -- Cuotas explicitas del usuario (pueden ser mas restrictivas si se desea)
+  FOR q IN (SELECT tablespace_name, max_bytes FROM dba_ts_quotas WHERE username = v_owner ORDER BY 1) LOOP
+    DBMS_OUTPUT.PUT_LINE('-- Cuota original en PRE: ALTER USER "'||v_owner||'" QUOTA '
+      || CASE WHEN q.max_bytes=-1 THEN 'UNLIMITED' ELSE TO_CHAR(ROUND(q.max_bytes/1048576))||'M' END
+      ||' ON "'||q.tablespace_name||'";');
+  END LOOP;
+END;
+/
 PROMPT
 
-PROMPT -- [D] PRIVILEGIOS DE SISTEMA
+-- --------------------------------------------------------------------------
+-- [4] PRIVILEGIOS DE SISTEMA Y ROLES
+-- --------------------------------------------------------------------------
+PROMPT -- [4] PRIVILEGIOS DE SISTEMA
 PROMPT
 SELECT 'GRANT ' || privilege
     || CASE WHEN admin_option='YES' THEN ' WITH ADMIN OPTION' ELSE '' END
     || ' TO "' || grantee || '";'
-FROM   dba_sys_privs WHERE grantee=UPPER('&v_schema') ORDER BY 1;
+FROM   dba_sys_privs WHERE grantee = UPPER('&v_schema') ORDER BY 1;
 PROMPT
 
-PROMPT -- [E] ROLES
+PROMPT -- [5] ROLES
 PROMPT
 SELECT 'GRANT "' || granted_role || '"'
     || CASE WHEN admin_option='YES' THEN ' WITH ADMIN OPTION' ELSE '' END
     || ' TO "' || grantee || '";'
-FROM   dba_role_privs WHERE grantee=UPPER('&v_schema') ORDER BY 1;
+FROM   dba_role_privs WHERE grantee = UPPER('&v_schema') ORDER BY 1;
 PROMPT
 
-PROMPT -- [F] GRANTS RECIBIDOS DE OTROS ESQUEMAS
-PROMPT --     Verificar que esos esquemas y objetos existen en DEV
+-- --------------------------------------------------------------------------
+-- [5] GRANTS RECIBIDOS / OTORGADOS / SINONIMOS PUBLICOS / ACLs
+-- --------------------------------------------------------------------------
+PROMPT -- [6] GRANTS RECIBIDOS DE OTROS ESQUEMAS (verificar que esos objetos existen en DEV)
 PROMPT
-SELECT 'GRANT ' || privilege
-    || ' ON "' || owner || '"."' || table_name || '"'
+SELECT 'GRANT ' || privilege || ' ON "' || owner || '"."' || table_name || '"'
     || ' TO "' || grantee || '"'
     || CASE WHEN grantable='YES' THEN ' WITH GRANT OPTION' ELSE '' END || ';'
 FROM   dba_tab_privs
-WHERE  grantee=UPPER('&v_schema') AND owner!=UPPER('&v_schema')
-ORDER BY 1,2,3;
+WHERE  grantee = UPPER('&v_schema') AND owner != UPPER('&v_schema') ORDER BY 1, 2;
 PROMPT
 
-PROMPT -- [G] GRANTS OTORGADOS A OTROS USUARIOS/ROLES
+PROMPT -- [7] GRANTS OTORGADOS A OTROS
 PROMPT
-SELECT 'GRANT ' || privilege
-    || ' ON "' || owner || '"."' || table_name || '"'
+SELECT 'GRANT ' || privilege || ' ON "' || owner || '"."' || table_name || '"'
     || ' TO "' || grantee || '"'
     || CASE WHEN grantable='YES' THEN ' WITH GRANT OPTION' ELSE '' END || ';'
 FROM   dba_tab_privs
-WHERE  owner=UPPER('&v_schema') AND grantee!=UPPER('&v_schema')
-ORDER BY 1,2,3;
+WHERE  owner = UPPER('&v_schema') AND grantee != UPPER('&v_schema') ORDER BY 1, 2;
 PROMPT
 
-PROMPT -- [H] SINONIMOS PUBLICOS
+PROMPT -- [8] SINONIMOS PUBLICOS
 PROMPT
-SELECT 'CREATE OR REPLACE PUBLIC SYNONYM "' || synonym_name || '"'
-    || ' FOR "' || table_owner || '"."' || table_name || '"'
+SELECT 'CREATE OR REPLACE PUBLIC SYNONYM "' || synonym_name || '" FOR "'
+    || table_owner || '"."' || table_name || '"'
     || CASE WHEN db_link IS NOT NULL THEN '@"'||db_link||'"' ELSE '' END || ';'
-FROM   dba_synonyms
-WHERE  owner='PUBLIC' AND table_owner=UPPER('&v_schema') ORDER BY 1;
+FROM   dba_synonyms WHERE owner='PUBLIC' AND table_owner=UPPER('&v_schema') ORDER BY 1;
 PROMPT
 
-PROMPT -- [I] ACLs DE RED (Oracle 12c+)
-PROMPT --     Verificar hosts accesibles desde DEV antes de habilitar
+PROMPT -- [9] ACLs DE RED (Oracle 12c+)
 PROMPT
 BEGIN
-  FOR r IN (
-    SELECT DISTINCT host, lower_port, upper_port, principal, privilege, is_grant
-    FROM   dba_host_aces WHERE principal=UPPER('&v_schema')
-  ) LOOP
-    IF r.is_grant = 'TRUE' THEN
-      DBMS_OUTPUT.PUT_LINE(
-        'BEGIN DBMS_NETWORK_ACL_ADMIN.APPEND_HOST_ACE('
-        ||' host=>'''||r.host||''''
-        ||CASE WHEN r.lower_port IS NOT NULL THEN ',lower_port=>'||r.lower_port ELSE '' END
-        ||CASE WHEN r.upper_port IS NOT NULL THEN ',upper_port=>'||r.upper_port ELSE '' END
-        ||', ace=>xs$ace_type(privilege_list=>xs$privilege_list('''||r.privilege||''')'
-        ||', principal_name=>'''||r.principal||''',principal_type=>xs_acl.ptype_db)); END;'
-        ||CHR(10)||'/'
-      );
-    END IF;
+  FOR r IN (SELECT DISTINCT host, lower_port, upper_port, principal, privilege
+            FROM dba_host_aces WHERE principal=UPPER('&v_schema') AND is_grant='TRUE') LOOP
+    DBMS_OUTPUT.PUT_LINE(
+      'BEGIN DBMS_NETWORK_ACL_ADMIN.APPEND_HOST_ACE(host=>'''||r.host||''''
+      ||CASE WHEN r.lower_port IS NOT NULL THEN ',lower_port=>'||r.lower_port ELSE '' END
+      ||CASE WHEN r.upper_port IS NOT NULL THEN ',upper_port=>'||r.upper_port ELSE '' END
+      ||',ace=>xs$ace_type(privilege_list=>xs$privilege_list('''||r.privilege||''')'
+      ||',principal_name=>'''||r.principal||''',principal_type=>xs_acl.ptype_db)); END;'
+      ||CHR(10)||'/'
+    );
   END LOOP;
 EXCEPTION WHEN OTHERS THEN
-  DBMS_OUTPUT.PUT_LINE('-- ACLs no disponibles en esta version de Oracle (11g): revisar dba_network_acls');
+  DBMS_OUTPUT.PUT_LINE('-- ACLs: revisar dba_network_acls (Oracle 11g)');
 END;
 /
 PROMPT
 
-SPOOL OFF
-PROMPT [OK] Generado: &f_grants
-
-
--- ============================================================================
--- FICHERO 4: DDL DE TODOS LOS OBJETOS
--- ============================================================================
-SPOOL &f_ddl
-PROMPT -- ==================================================================
-PROMPT -- dev_02_ddl_objetos.sql — Ejecutar en DEV como SYSDBA
-SELECT '-- Generado desde PRE el ' || TO_CHAR(SYSDATE,'DD/MM/YYYY HH24:MI:SS') FROM DUAL;
-PROMPT -- Ejecutar DESPUES de dev_01_usuario_grants.sql
-PROMPT -- ==================================================================
+-- --------------------------------------------------------------------------
+-- DDL DE OBJETOS (orden de dependencias)
+-- --------------------------------------------------------------------------
+PROMPT -- ================================================================
+PROMPT -- DDL DE OBJETOS
+PROMPT -- ================================================================
 PROMPT
 
--- Tipos y cuerpos de tipo
+-- Types
 DECLARE
   v_ddl CLOB; v_owner VARCHAR2(128):=UPPER('&v_schema');
 BEGIN
   DBMS_OUTPUT.PUT_LINE('-- === TYPES ==='); DBMS_OUTPUT.PUT_LINE('');
-  FOR r IN (SELECT object_type,object_name FROM dba_objects
+  FOR r IN (SELECT object_type, object_name FROM dba_objects
             WHERE owner=v_owner AND object_type IN ('TYPE','TYPE BODY') AND status='VALID'
             AND object_name NOT LIKE 'SYS_PLSQL_%'
             ORDER BY CASE object_type WHEN 'TYPE' THEN 1 ELSE 2 END, object_name) LOOP
     BEGIN
-      v_ddl:=DBMS_METADATA.GET_DDL(REPLACE(r.object_type,' ','_'),r.object_name,v_owner);
+      v_ddl := DBMS_METADATA.GET_DDL(REPLACE(r.object_type,' ','_'), r.object_name, v_owner);
       DBMS_OUTPUT.PUT_LINE(v_ddl); DBMS_OUTPUT.PUT_LINE('/'); DBMS_OUTPUT.PUT_LINE('');
     EXCEPTION WHEN OTHERS THEN
       DBMS_OUTPUT.PUT_LINE('-- ERROR '||r.object_type||' '||r.object_name||': '||SQLERRM);
@@ -445,7 +321,7 @@ BEGIN
             WHERE owner=v_owner AND object_type='SEQUENCE' AND status='VALID'
             ORDER BY object_name) LOOP
     BEGIN
-      v_ddl:=DBMS_METADATA.GET_DDL('SEQUENCE',r.object_name,v_owner);
+      v_ddl := DBMS_METADATA.GET_DDL('SEQUENCE', r.object_name, v_owner);
       DBMS_OUTPUT.PUT_LINE(v_ddl); DBMS_OUTPUT.PUT_LINE('/'); DBMS_OUTPUT.PUT_LINE('');
     EXCEPTION WHEN OTHERS THEN
       DBMS_OUTPUT.PUT_LINE('-- ERROR SEQUENCE '||r.object_name||': '||SQLERRM);
@@ -454,16 +330,14 @@ BEGIN
 END;
 /
 
--- Materialized View Logs (antes que las MVs y las tablas base)
+-- Materialized View Logs (antes que tablas base)
 DECLARE
   v_ddl CLOB; v_owner VARCHAR2(128):=UPPER('&v_schema');
 BEGIN
   DBMS_OUTPUT.PUT_LINE('-- === MATERIALIZED VIEW LOGS ==='); DBMS_OUTPUT.PUT_LINE('');
-  FOR r IN (SELECT log_table FROM dba_mview_logs
-            WHERE log_owner=v_owner ORDER BY log_table) LOOP
+  FOR r IN (SELECT log_table FROM dba_mview_logs WHERE log_owner=v_owner ORDER BY 1) LOOP
     BEGIN
-      -- El log_table es el nombre de la tabla base
-      v_ddl:=DBMS_METADATA.GET_DDL('MATERIALIZED_VIEW_LOG',r.log_table,v_owner);
+      v_ddl := DBMS_METADATA.GET_DDL('MATERIALIZED_VIEW_LOG', r.log_table, v_owner);
       DBMS_OUTPUT.PUT_LINE(v_ddl); DBMS_OUTPUT.PUT_LINE('/'); DBMS_OUTPUT.PUT_LINE('');
     EXCEPTION WHEN OTHERS THEN
       DBMS_OUTPUT.PUT_LINE('-- ERROR MVIEW LOG '||r.log_table||': '||SQLERRM);
@@ -482,7 +356,7 @@ BEGIN
             WHERE owner=v_owner AND object_type='TABLE' AND status='VALID'
             AND object_name NOT LIKE 'BIN$%' ORDER BY object_name) LOOP
     BEGIN
-      v_ddl:=DBMS_METADATA.GET_DDL('TABLE',r.object_name,v_owner);
+      v_ddl := DBMS_METADATA.GET_DDL('TABLE', r.object_name, v_owner);
       DBMS_OUTPUT.PUT_LINE(v_ddl); DBMS_OUTPUT.PUT_LINE('/'); DBMS_OUTPUT.PUT_LINE('');
     EXCEPTION WHEN OTHERS THEN
       DBMS_OUTPUT.PUT_LINE('-- ERROR TABLE '||r.object_name||': '||SQLERRM);
@@ -491,7 +365,7 @@ BEGIN
 END;
 /
 
--- Indexes (excluye los de PK/UK que se crean con la constraint)
+-- Indexes (excluye los generados por PK/UK)
 DECLARE
   v_ddl CLOB; v_owner VARCHAR2(128):=UPPER('&v_schema');
 BEGIN
@@ -503,7 +377,7 @@ BEGIN
                             AND c.constraint_type IN ('P','U'))
             ORDER BY i.index_name) LOOP
     BEGIN
-      v_ddl:=DBMS_METADATA.GET_DDL('INDEX',r.index_name,v_owner);
+      v_ddl := DBMS_METADATA.GET_DDL('INDEX', r.index_name, v_owner);
       DBMS_OUTPUT.PUT_LINE(v_ddl); DBMS_OUTPUT.PUT_LINE('/'); DBMS_OUTPUT.PUT_LINE('');
     EXCEPTION WHEN OTHERS THEN
       DBMS_OUTPUT.PUT_LINE('-- ERROR INDEX '||r.index_name||': '||SQLERRM);
@@ -512,43 +386,27 @@ BEGIN
 END;
 /
 
--- PK y UK
+-- PK, UK, Check constraints
 DECLARE
   v_ddl CLOB; v_owner VARCHAR2(128):=UPPER('&v_schema');
 BEGIN
-  DBMS_OUTPUT.PUT_LINE('-- === PRIMARY KEYS / UNIQUE CONSTRAINTS ==='); DBMS_OUTPUT.PUT_LINE('');
-  FOR r IN (SELECT constraint_name FROM dba_constraints
-            WHERE owner=v_owner AND constraint_type IN ('P','U') AND status='ENABLED'
-            ORDER BY table_name, constraint_name) LOOP
+  DBMS_OUTPUT.PUT_LINE('-- === PK / UK / CHECK CONSTRAINTS ==='); DBMS_OUTPUT.PUT_LINE('');
+  FOR r IN (SELECT constraint_name, constraint_type FROM dba_constraints
+            WHERE owner=v_owner AND constraint_type IN ('P','U','C') AND status='ENABLED'
+            AND (constraint_type != 'C' OR generated='USER NAME')
+            ORDER BY CASE constraint_type WHEN 'P' THEN 1 WHEN 'U' THEN 2 ELSE 3 END,
+                     table_name, constraint_name) LOOP
     BEGIN
-      v_ddl:=DBMS_METADATA.GET_DDL('CONSTRAINT',r.constraint_name,v_owner);
+      v_ddl := DBMS_METADATA.GET_DDL('CONSTRAINT', r.constraint_name, v_owner);
       DBMS_OUTPUT.PUT_LINE(v_ddl); DBMS_OUTPUT.PUT_LINE('/'); DBMS_OUTPUT.PUT_LINE('');
     EXCEPTION WHEN OTHERS THEN
-      DBMS_OUTPUT.PUT_LINE('-- ERROR PK/UK '||r.constraint_name||': '||SQLERRM);
+      DBMS_OUTPUT.PUT_LINE('-- ERROR CONSTRAINT '||r.constraint_name||': '||SQLERRM);
     END;
   END LOOP;
 END;
 /
 
--- Check constraints
-DECLARE
-  v_ddl CLOB; v_owner VARCHAR2(128):=UPPER('&v_schema');
-BEGIN
-  DBMS_OUTPUT.PUT_LINE('-- === CHECK CONSTRAINTS ==='); DBMS_OUTPUT.PUT_LINE('');
-  FOR r IN (SELECT constraint_name FROM dba_constraints
-            WHERE owner=v_owner AND constraint_type='C' AND status='ENABLED'
-            AND generated='USER NAME' ORDER BY table_name, constraint_name) LOOP
-    BEGIN
-      v_ddl:=DBMS_METADATA.GET_DDL('CONSTRAINT',r.constraint_name,v_owner);
-      DBMS_OUTPUT.PUT_LINE(v_ddl); DBMS_OUTPUT.PUT_LINE('/'); DBMS_OUTPUT.PUT_LINE('');
-    EXCEPTION WHEN OTHERS THEN
-      DBMS_OUTPUT.PUT_LINE('-- ERROR CHECK '||r.constraint_name||': '||SQLERRM);
-    END;
-  END LOOP;
-END;
-/
-
--- Foreign Keys (al final para evitar dependencias de orden)
+-- Foreign Keys
 DECLARE
   v_ddl CLOB; v_owner VARCHAR2(128):=UPPER('&v_schema');
 BEGIN
@@ -557,7 +415,7 @@ BEGIN
             WHERE owner=v_owner AND constraint_type='R' AND status='ENABLED'
             ORDER BY table_name, constraint_name) LOOP
     BEGIN
-      v_ddl:=DBMS_METADATA.GET_DDL('REF_CONSTRAINT',r.constraint_name,v_owner);
+      v_ddl := DBMS_METADATA.GET_DDL('REF_CONSTRAINT', r.constraint_name, v_owner);
       DBMS_OUTPUT.PUT_LINE(v_ddl); DBMS_OUTPUT.PUT_LINE('/'); DBMS_OUTPUT.PUT_LINE('');
     EXCEPTION WHEN OTHERS THEN
       DBMS_OUTPUT.PUT_LINE('-- ERROR FK '||r.constraint_name||': '||SQLERRM);
@@ -575,10 +433,10 @@ BEGIN
             WHERE owner=v_owner AND object_type='MATERIALIZED VIEW' AND status='VALID'
             ORDER BY object_name) LOOP
     BEGIN
-      v_ddl:=DBMS_METADATA.GET_DDL('MATERIALIZED_VIEW',r.object_name,v_owner);
+      v_ddl := DBMS_METADATA.GET_DDL('MATERIALIZED_VIEW', r.object_name, v_owner);
       DBMS_OUTPUT.PUT_LINE(v_ddl); DBMS_OUTPUT.PUT_LINE('/'); DBMS_OUTPUT.PUT_LINE('');
     EXCEPTION WHEN OTHERS THEN
-      DBMS_OUTPUT.PUT_LINE('-- ERROR MATERIALIZED VIEW '||r.object_name||': '||SQLERRM);
+      DBMS_OUTPUT.PUT_LINE('-- ERROR MVIEW '||r.object_name||': '||SQLERRM);
     END;
   END LOOP;
 END;
@@ -593,7 +451,7 @@ BEGIN
             WHERE owner=v_owner AND object_type='VIEW' AND status='VALID'
             ORDER BY object_name) LOOP
     BEGIN
-      v_ddl:=DBMS_METADATA.GET_DDL('VIEW',r.object_name,v_owner);
+      v_ddl := DBMS_METADATA.GET_DDL('VIEW', r.object_name, v_owner);
       DBMS_OUTPUT.PUT_LINE(v_ddl); DBMS_OUTPUT.PUT_LINE('/'); DBMS_OUTPUT.PUT_LINE('');
     EXCEPTION WHEN OTHERS THEN
       DBMS_OUTPUT.PUT_LINE('-- ERROR VIEW '||r.object_name||': '||SQLERRM);
@@ -606,8 +464,7 @@ END;
 DECLARE
   v_ddl CLOB; v_owner VARCHAR2(128):=UPPER('&v_schema');
 BEGIN
-  DBMS_OUTPUT.PUT_LINE('-- === STORED CODE (PROCEDURES / FUNCTIONS / PACKAGES / TRIGGERS) ===');
-  DBMS_OUTPUT.PUT_LINE('');
+  DBMS_OUTPUT.PUT_LINE('-- === STORED CODE ==='); DBMS_OUTPUT.PUT_LINE('');
   FOR r IN (SELECT object_type, object_name FROM dba_objects
             WHERE owner=v_owner AND status='VALID'
             AND object_type IN ('PROCEDURE','FUNCTION','PACKAGE','PACKAGE BODY','TRIGGER')
@@ -616,7 +473,7 @@ BEGIN
               WHEN 'PROCEDURE'    THEN 3 WHEN 'FUNCTION'     THEN 4
               WHEN 'TRIGGER'      THEN 5 ELSE 6 END, object_name) LOOP
     BEGIN
-      v_ddl:=DBMS_METADATA.GET_DDL(REPLACE(r.object_type,' ','_'),r.object_name,v_owner);
+      v_ddl := DBMS_METADATA.GET_DDL(REPLACE(r.object_type,' ','_'), r.object_name, v_owner);
       DBMS_OUTPUT.PUT_LINE(v_ddl); DBMS_OUTPUT.PUT_LINE('/'); DBMS_OUTPUT.PUT_LINE('');
     EXCEPTION WHEN OTHERS THEN
       DBMS_OUTPUT.PUT_LINE('-- ERROR '||r.object_type||' '||r.object_name||': '||SQLERRM);
@@ -634,7 +491,7 @@ BEGIN
             WHERE owner=v_owner AND object_type='SYNONYM' AND status='VALID'
             ORDER BY object_name) LOOP
     BEGIN
-      v_ddl:=DBMS_METADATA.GET_DDL('SYNONYM',r.object_name,v_owner);
+      v_ddl := DBMS_METADATA.GET_DDL('SYNONYM', r.object_name, v_owner);
       DBMS_OUTPUT.PUT_LINE(v_ddl); DBMS_OUTPUT.PUT_LINE('/'); DBMS_OUTPUT.PUT_LINE('');
     EXCEPTION WHEN OTHERS THEN
       DBMS_OUTPUT.PUT_LINE('-- ERROR SYNONYM '||r.object_name||': '||SQLERRM);
@@ -643,16 +500,15 @@ BEGIN
 END;
 /
 
--- DB Links
+-- Database Links
 DECLARE
   v_ddl CLOB; v_owner VARCHAR2(128):=UPPER('&v_schema');
 BEGIN
   DBMS_OUTPUT.PUT_LINE('-- === DATABASE LINKS ==='); DBMS_OUTPUT.PUT_LINE('');
   FOR r IN (SELECT object_name FROM dba_objects
-            WHERE owner=v_owner AND object_type='DATABASE LINK'
-            ORDER BY object_name) LOOP
+            WHERE owner=v_owner AND object_type='DATABASE LINK' ORDER BY object_name) LOOP
     BEGIN
-      v_ddl:=DBMS_METADATA.GET_DDL('DB_LINK',r.object_name,v_owner);
+      v_ddl := DBMS_METADATA.GET_DDL('DB_LINK', r.object_name, v_owner);
       DBMS_OUTPUT.PUT_LINE(v_ddl); DBMS_OUTPUT.PUT_LINE('/'); DBMS_OUTPUT.PUT_LINE('');
     EXCEPTION WHEN OTHERS THEN
       DBMS_OUTPUT.PUT_LINE('-- ERROR DB_LINK '||r.object_name||': '||SQLERRM);
@@ -661,30 +517,18 @@ BEGIN
 END;
 /
 
--- Comments (tabla y columna)
+-- Comments
 DECLARE
   v_ddl CLOB; v_owner VARCHAR2(128):=UPPER('&v_schema');
 BEGIN
-  DBMS_OUTPUT.PUT_LINE('-- === COMMENTS (TABLAS Y COLUMNAS) ==='); DBMS_OUTPUT.PUT_LINE('');
-  FOR r IN (SELECT DISTINCT table_name FROM dba_tab_comments
-            WHERE owner=v_owner AND comments IS NOT NULL
-            ORDER BY table_name) LOOP
+  DBMS_OUTPUT.PUT_LINE('-- === COMMENTS ==='); DBMS_OUTPUT.PUT_LINE('');
+  FOR r IN (SELECT DISTINCT table_name FROM
+              (SELECT table_name FROM dba_tab_comments WHERE owner=v_owner AND comments IS NOT NULL
+               UNION
+               SELECT table_name FROM dba_col_comments WHERE owner=v_owner AND comments IS NOT NULL)
+            ORDER BY 1) LOOP
     BEGIN
-      v_ddl:=DBMS_METADATA.GET_DEPENDENT_DDL('COMMENT',r.table_name,v_owner);
-      IF v_ddl IS NOT NULL THEN
-        DBMS_OUTPUT.PUT_LINE(v_ddl); DBMS_OUTPUT.PUT_LINE('/'); DBMS_OUTPUT.PUT_LINE('');
-      END IF;
-    EXCEPTION WHEN OTHERS THEN NULL;
-    END;
-  END LOOP;
-  -- Columnas sin comment de tabla pero con comment de columna
-  FOR r IN (SELECT DISTINCT table_name FROM dba_col_comments
-            WHERE owner=v_owner AND comments IS NOT NULL
-            AND table_name NOT IN (SELECT table_name FROM dba_tab_comments
-                                   WHERE owner=v_owner AND comments IS NOT NULL)
-            ORDER BY table_name) LOOP
-    BEGIN
-      v_ddl:=DBMS_METADATA.GET_DEPENDENT_DDL('COMMENT',r.table_name,v_owner);
+      v_ddl := DBMS_METADATA.GET_DEPENDENT_DDL('COMMENT', r.table_name, v_owner);
       IF v_ddl IS NOT NULL THEN
         DBMS_OUTPUT.PUT_LINE(v_ddl); DBMS_OUTPUT.PUT_LINE('/'); DBMS_OUTPUT.PUT_LINE('');
       END IF;
@@ -704,7 +548,7 @@ BEGIN
             AND object_type IN ('TABLE','VIEW','SEQUENCE','PROCEDURE','FUNCTION','PACKAGE','TYPE')
             ORDER BY object_type, object_name) LOOP
     BEGIN
-      v_ddl:=DBMS_METADATA.GET_DEPENDENT_DDL('OBJECT_GRANT',r.object_name,v_owner);
+      v_ddl := DBMS_METADATA.GET_DEPENDENT_DDL('OBJECT_GRANT', r.object_name, v_owner);
       IF v_ddl IS NOT NULL THEN
         DBMS_OUTPUT.PUT_LINE(v_ddl); DBMS_OUTPUT.PUT_LINE('/'); DBMS_OUTPUT.PUT_LINE('');
       END IF;
@@ -714,21 +558,15 @@ BEGIN
 END;
 /
 
-SPOOL OFF
-PROMPT [OK] Generado: &f_ddl
-
-
--- ============================================================================
--- FICHERO 5: PRE-CARGA (deshabilitar triggers, jobs, constraints FK)
--- ============================================================================
-SPOOL &f_precarga
-PROMPT -- ==================================================================
-PROMPT -- dev_03_pre_carga.sql — Ejecutar en DEV como SYSDBA antes de cargar
-SELECT '-- Generado desde PRE el ' || TO_CHAR(SYSDATE,'DD/MM/YYYY HH24:MI:SS') FROM DUAL;
-PROMPT -- ==================================================================
+-- --------------------------------------------------------------------------
+-- DESHABILITAR FKs, TRIGGERS y JOBS antes de la carga
+-- --------------------------------------------------------------------------
+PROMPT -- ================================================================
+PROMPT -- DESHABILITAR ANTES DE LA CARGA
+PROMPT -- ================================================================
 PROMPT
 
-PROMPT -- [A] DESHABILITAR FOREIGN KEYS (evitar errores de integridad durante carga)
+PROMPT -- Foreign Keys
 PROMPT
 SELECT 'ALTER TABLE "'||UPPER('&v_schema')||'"."'||table_name
     ||'" DISABLE CONSTRAINT "'||constraint_name||'";'
@@ -737,52 +575,60 @@ WHERE  owner=UPPER('&v_schema') AND constraint_type='R'
 ORDER BY table_name, constraint_name;
 PROMPT
 
-PROMPT -- [B] DESHABILITAR TRIGGERS
+PROMPT -- Triggers
 PROMPT
 SELECT 'ALTER TRIGGER "'||UPPER('&v_schema')||'"."'||trigger_name||'" DISABLE;'
 FROM   dba_triggers WHERE owner=UPPER('&v_schema') ORDER BY trigger_name;
 PROMPT
 
-PROMPT -- [C] DESHABILITAR JOBS DEL SCHEDULER
+PROMPT -- Jobs del Scheduler
 PROMPT
 SELECT 'BEGIN DBMS_SCHEDULER.DISABLE(''"'||UPPER('&v_schema')||'"."'||job_name||'"''); END;'
     ||CHR(10)||'/'
 FROM   dba_scheduler_jobs WHERE owner=UPPER('&v_schema') AND enabled='TRUE' ORDER BY job_name;
 PROMPT
 
-PROMPT -- [D] DESHABILITAR DBMS_JOB (legacy) — marcarlos como BROKEN
+PROMPT -- DBMS_JOB (legacy)
 PROMPT
 SELECT 'BEGIN DBMS_JOB.BROKEN('||job||',TRUE); COMMIT; END;'||CHR(10)||'/'
 FROM   dba_jobs WHERE schema_user=UPPER('&v_schema') AND broken='N' ORDER BY job;
 PROMPT
 
-PROMPT -- [E] CONFIRMAR ESTADO ANTES DE INICIAR LA CARGA
-PROMPT
-PROMPT SELECT 'Triggers deshabilitados: '||COUNT(*) FROM dba_triggers
-PROMPT WHERE owner='&v_schema' AND status='DISABLED';
-PROMPT
+PROMPT -- ================================================================
+PROMPT -- >>> REALIZAR LA CARGA DE DATOS AHORA <<<
+PROMPT -- Cuando termine, ejecutar: dev_2_despues_carga.sql
+PROMPT -- ================================================================
 
 SPOOL OFF
-PROMPT [OK] Generado: &f_precarga
+PROMPT [OK] dev_1_antes_carga.sql
 
 
 -- ============================================================================
--- FICHERO 6: POST-CARGA (habilitar, reajustar secuencias, recompilar)
+-- FICHERO 3: DEV — DESPUES DE LA CARGA
+-- Contiene: rehabilitar FKs/triggers/jobs, reajustar secuencias,
+--           recompilar invalidos, validacion final
 -- ============================================================================
-SPOOL &f_postcarga
+SPOOL dev_2_despues_carga.sql
+
 PROMPT -- ==================================================================
-PROMPT -- dev_04_post_carga.sql — Ejecutar en DEV como SYSDBA DESPUES de cargar
+PROMPT -- dev_2_despues_carga.sql
+PROMPT -- Ejecutar en DEV como SYSDBA DESPUES de la carga de datos
 SELECT '-- Generado desde PRE el ' || TO_CHAR(SYSDATE,'DD/MM/YYYY HH24:MI:SS') FROM DUAL;
 PROMPT -- ==================================================================
 PROMPT
+PROMPT SET SERVEROUTPUT ON SIZE UNLIMITED
+PROMPT SET FEEDBACK ON
+PROMPT SET LINESIZE 200
+PROMPT SET PAGESIZE 50
+PROMPT
 
-PROMPT -- [A] REHABILITAR TRIGGERS
+PROMPT -- [1] REHABILITAR TRIGGERS
 PROMPT
 SELECT 'ALTER TRIGGER "'||UPPER('&v_schema')||'"."'||trigger_name||'" ENABLE;'
 FROM   dba_triggers WHERE owner=UPPER('&v_schema') ORDER BY trigger_name;
 PROMPT
 
-PROMPT -- [B] REHABILITAR Y VALIDAR FOREIGN KEYS
+PROMPT -- [2] REHABILITAR FOREIGN KEYS (NOVALIDATE: no releer todos los datos)
 PROMPT
 SELECT 'ALTER TABLE "'||UPPER('&v_schema')||'"."'||table_name
     ||'" ENABLE NOVALIDATE CONSTRAINT "'||constraint_name||'";'
@@ -791,25 +637,17 @@ WHERE  owner=UPPER('&v_schema') AND constraint_type='R'
 ORDER BY table_name, constraint_name;
 PROMPT
 
-PROMPT -- [C] REHABILITAR JOBS DEL SCHEDULER
+PROMPT -- [3] REHABILITAR JOBS
 PROMPT
-SELECT 'BEGIN DBMS_SCHEDULER.ENABLE(''"'||UPPER('&v_schema')||'"."'||job_name||'"''); END;'
-    ||CHR(10)||'/'
+SELECT 'BEGIN DBMS_SCHEDULER.ENABLE(''"'||UPPER('&v_schema')||'"."'||job_name||'"''); END;'||CHR(10)||'/'
 FROM   dba_scheduler_jobs WHERE owner=UPPER('&v_schema') ORDER BY job_name;
-PROMPT
-
-PROMPT -- [D] REHABILITAR DBMS_JOB (legacy)
 PROMPT
 SELECT 'BEGIN DBMS_JOB.BROKEN('||job||',FALSE,SYSDATE); COMMIT; END;'||CHR(10)||'/'
 FROM   dba_jobs WHERE schema_user=UPPER('&v_schema') ORDER BY job;
 PROMPT
 
-PROMPT -- [E] REAJUSTAR SECUENCIAS al maximo de los datos cargados en DEV
+PROMPT -- [4] REAJUSTAR SECUENCIAS al maximo de los datos cargados en DEV
 PROMPT --     Evita ORA-00001 cuando la aplicacion use NEXTVAL
-PROMPT --     Este bloque se ejecuta dinamicamente en DEV contra los datos reales cargados
-PROMPT
-PROMPT SET SERVEROUTPUT ON SIZE UNLIMITED
-PROMPT
 PROMPT DECLARE
 PROMPT   v_owner VARCHAR2(128) := '&v_schema';
 PROMPT   v_col   VARCHAR2(128);
@@ -818,13 +656,10 @@ PROMPT   v_max   NUMBER;
 PROMPT   v_curr  NUMBER;
 PROMPT   v_diff  NUMBER;
 PROMPT BEGIN
-PROMPT   FOR s IN (SELECT sequence_name, last_number
-PROMPT             FROM   dba_sequences
-PROMPT             WHERE  sequence_owner = v_owner
-PROMPT             ORDER BY sequence_name) LOOP
+PROMPT   FOR s IN (SELECT sequence_name, last_number FROM dba_sequences
+PROMPT             WHERE sequence_owner = v_owner ORDER BY sequence_name) LOOP
 PROMPT     BEGIN
-PROMPT       SELECT c.table_name, c.column_name
-PROMPT       INTO   v_table, v_col
+PROMPT       SELECT c.table_name, c.column_name INTO v_table, v_col
 PROMPT       FROM   dba_tab_columns c
 PROMPT       WHERE  c.owner = v_owner
 PROMPT         AND  UPPER(c.data_default) LIKE '%'||s.sequence_name||'%'
@@ -835,118 +670,62 @@ PROMPT         INTO v_max;
 PROMPT       v_curr := s.last_number;
 PROMPT       v_diff := v_max - v_curr + 1;
 PROMPT       IF v_diff > 0 THEN
-PROMPT         EXECUTE IMMEDIATE
-PROMPT           'ALTER SEQUENCE "'||v_owner||'"."'||s.sequence_name||'" INCREMENT BY '||v_diff;
-PROMPT         EXECUTE IMMEDIATE
-PROMPT           'SELECT "'||v_owner||'"."'||s.sequence_name||'".NEXTVAL FROM DUAL';
-PROMPT         EXECUTE IMMEDIATE
-PROMPT           'ALTER SEQUENCE "'||v_owner||'"."'||s.sequence_name||'" INCREMENT BY 1';
-PROMPT         DBMS_OUTPUT.PUT_LINE('Ajustada: '||s.sequence_name
-PROMPT           ||' -> '||v_max||' (tabla '||v_table||'.'||v_col||')');
+PROMPT         EXECUTE IMMEDIATE 'ALTER SEQUENCE "'||v_owner||'"."'||s.sequence_name||'" INCREMENT BY '||v_diff;
+PROMPT         EXECUTE IMMEDIATE 'SELECT "'||v_owner||'"."'||s.sequence_name||'".NEXTVAL FROM DUAL';
+PROMPT         EXECUTE IMMEDIATE 'ALTER SEQUENCE "'||v_owner||'"."'||s.sequence_name||'" INCREMENT BY 1';
+PROMPT         DBMS_OUTPUT.PUT_LINE('Ajustada: '||s.sequence_name||' -> '||v_max||' ('||v_table||'.'||v_col||')');
 PROMPT       ELSE
-PROMPT         DBMS_OUTPUT.PUT_LINE('OK: '||s.sequence_name||' (no requiere ajuste)');
+PROMPT         DBMS_OUTPUT.PUT_LINE('OK: '||s.sequence_name||' (sin ajuste necesario)');
 PROMPT       END IF;
-PROMPT     EXCEPTION
-PROMPT       WHEN NO_DATA_FOUND THEN
-PROMPT         DBMS_OUTPUT.PUT_LINE('ATENCION: '||s.sequence_name
-PROMPT           ||' sin columna DEFAULT asociada - revisar manualmente');
+PROMPT     EXCEPTION WHEN NO_DATA_FOUND THEN
+PROMPT       DBMS_OUTPUT.PUT_LINE('ATENCION: '||s.sequence_name||' sin columna DEFAULT asociada - revisar manualmente');
 PROMPT     END;
 PROMPT   END LOOP;
 PROMPT END;
 PROMPT /
 PROMPT
 
-PROMPT -- [F] RECOMPILAR OBJETOS INVALIDOS
-PROMPT
+PROMPT -- [5] RECOMPILAR OBJETOS INVALIDOS
 PROMPT BEGIN
 PROMPT   DBMS_UTILITY.COMPILE_SCHEMA(schema => '&v_schema', compile_all => FALSE);
 PROMPT END;
 PROMPT /
 PROMPT
 
-SPOOL OFF
-PROMPT [OK] Generado: &f_postcarga
-
-
--- ============================================================================
--- FICHERO 7: VALIDACION FINAL
--- ============================================================================
-SPOOL &f_validacion
-PROMPT -- ==================================================================
-PROMPT -- dev_05_validacion.sql — Ejecutar en DEV como SYSDBA tras post-carga
-SELECT '-- Generado desde PRE el ' || TO_CHAR(SYSDATE,'DD/MM/YYYY HH24:MI:SS') FROM DUAL;
-PROMPT -- ==================================================================
+PROMPT -- ================================================================
+PROMPT -- VALIDACION FINAL
+PROMPT -- ================================================================
 PROMPT
 
-PROMPT SET SERVEROUTPUT ON SIZE UNLIMITED
-PROMPT SET LINESIZE 200
-PROMPT SET PAGESIZE 50
+PROMPT -- Objetos invalidos (debe ser 0 filas):
+PROMPT SELECT object_type, object_name, status FROM dba_objects
+PROMPT WHERE  owner = '&v_schema' AND status = 'INVALID' ORDER BY 1, 2;
 PROMPT
-PROMPT -- [1] OBJETOS INVALIDOS (debe ser 0 filas)
-PROMPT SELECT object_type, object_name, status, last_ddl_time
-PROMPT FROM   dba_objects
-PROMPT WHERE  owner  = '&v_schema'
-PROMPT   AND  status = 'INVALID'
-PROMPT ORDER BY object_type, object_name;
-PROMPT
-PROMPT -- [2] RESUMEN DE OBJETOS POR TIPO
-PROMPT SELECT object_type,
-PROMPT        COUNT(*) total,
-PROMPT        SUM(CASE WHEN status='VALID'   THEN 1 ELSE 0 END) validos,
+
+PROMPT -- Resumen por tipo:
+PROMPT SELECT object_type, COUNT(*) total,
+PROMPT        SUM(CASE WHEN status='VALID' THEN 1 ELSE 0 END) validos,
 PROMPT        SUM(CASE WHEN status='INVALID' THEN 1 ELSE 0 END) invalidos
-PROMPT FROM   dba_objects
-PROMPT WHERE  owner = '&v_schema'
-PROMPT GROUP BY object_type
-PROMPT ORDER BY object_type;
+PROMPT FROM   dba_objects WHERE owner = '&v_schema'
+PROMPT GROUP BY object_type ORDER BY object_type;
 PROMPT
-PROMPT -- [3] TRIGGERS: verificar que estan habilitados
-PROMPT SELECT trigger_name, table_name, status
-PROMPT FROM   dba_triggers
-PROMPT WHERE  owner = '&v_schema'
-PROMPT ORDER BY trigger_name;
-PROMPT
-PROMPT -- [4] JOBS: verificar estado
-PROMPT SELECT job_name, enabled, state
-PROMPT FROM   dba_scheduler_jobs
-PROMPT WHERE  owner = '&v_schema'
-PROMPT ORDER BY job_name;
-PROMPT
-PROMPT -- [5] FOREIGN KEYS: verificar que estan habilitadas
-PROMPT SELECT constraint_name, table_name, status
-PROMPT FROM   dba_constraints
-PROMPT WHERE  owner           = '&v_schema'
-PROMPT   AND  constraint_type = 'R'
-PROMPT ORDER BY table_name, constraint_name;
-PROMPT
-PROMPT -- [6] SECUENCIAS: verificar que NEXTVAL es mayor que el MAX de la tabla
-PROMPT --     Si aparece ALERTA -> la secuencia genera IDs ya existentes -> ORA-00001
+
+PROMPT -- Secuencias: NEXTVAL debe ser mayor que el MAX de cada tabla (0 alertas):
 PROMPT DECLARE
 PROMPT   v_owner VARCHAR2(128) := '&v_schema';
-PROMPT   v_col   VARCHAR2(128);
-PROMPT   v_table VARCHAR2(128);
-PROMPT   v_max   NUMBER;
+PROMPT   v_col VARCHAR2(128); v_table VARCHAR2(128); v_max NUMBER;
 PROMPT BEGIN
-PROMPT   FOR s IN (SELECT sequence_name, last_number
-PROMPT             FROM   dba_sequences
-PROMPT             WHERE  sequence_owner = v_owner
-PROMPT             ORDER BY sequence_name) LOOP
+PROMPT   FOR s IN (SELECT sequence_name, last_number FROM dba_sequences
+PROMPT             WHERE sequence_owner=v_owner ORDER BY sequence_name) LOOP
 PROMPT     BEGIN
-PROMPT       SELECT c.table_name, c.column_name
-PROMPT       INTO   v_table, v_col
+PROMPT       SELECT c.table_name, c.column_name INTO v_table, v_col
 PROMPT       FROM   dba_tab_columns c
-PROMPT       WHERE  c.owner = v_owner
-PROMPT         AND  UPPER(c.data_default) LIKE '%'||s.sequence_name||'%'
-PROMPT         AND  ROWNUM = 1;
-PROMPT       EXECUTE IMMEDIATE
-PROMPT         'SELECT NVL(MAX("'||v_col||'"),0) FROM "'||v_owner||'"."'||v_table||'"'
-PROMPT         INTO v_max;
+PROMPT       WHERE  c.owner=v_owner AND UPPER(c.data_default) LIKE '%'||s.sequence_name||'%' AND ROWNUM=1;
+PROMPT       EXECUTE IMMEDIATE 'SELECT NVL(MAX("'||v_col||'"),0) FROM "'||v_owner||'"."'||v_table||'"' INTO v_max;
 PROMPT       IF s.last_number <= v_max THEN
-PROMPT         DBMS_OUTPUT.PUT_LINE('*** ALERTA: '||s.sequence_name
-PROMPT           ||' NEXTVAL='||s.last_number||' <= MAX_ID='||v_max
-PROMPT           ||' ('||v_table||'.'||v_col||') -> ejecutar dev_04_post_carga.sql [E]');
+PROMPT         DBMS_OUTPUT.PUT_LINE('*** ALERTA: '||s.sequence_name||' NEXTVAL='||s.last_number||' <= MAX='||v_max||' -> riesgo ORA-00001');
 PROMPT       ELSE
-PROMPT         DBMS_OUTPUT.PUT_LINE('OK: '||s.sequence_name
-PROMPT           ||' NEXTVAL='||s.last_number||' > MAX_ID='||v_max);
+PROMPT         DBMS_OUTPUT.PUT_LINE('OK: '||s.sequence_name||' NEXTVAL='||s.last_number||' > MAX='||v_max);
 PROMPT       END IF;
 PROMPT     EXCEPTION WHEN OTHERS THEN
 PROMPT       DBMS_OUTPUT.PUT_LINE('INFO: '||s.sequence_name||' sin columna DEFAULT asociada');
@@ -955,53 +734,41 @@ PROMPT   END LOOP;
 PROMPT END;
 PROMPT /
 PROMPT
-PROMPT -- [7] CUOTAS: verificar espacio disponible en tablespaces
-PROMPT SELECT tablespace_name,
-PROMPT        CASE WHEN max_bytes = -1 THEN 'UNLIMITED'
-PROMPT             ELSE TO_CHAR(ROUND(max_bytes/1048576,2))||' MB'
-PROMPT        END cuota_max,
-PROMPT        ROUND(bytes/1048576,2)||' MB' usado
-PROMPT FROM   dba_ts_quotas
-PROMPT WHERE  username = '&v_schema'
-PROMPT ORDER BY tablespace_name;
-PROMPT
-PROMPT -- [8] TABLESPACES: verificar que existen en DEV
+
+PROMPT -- Tablespaces que usan los objetos vs los que existen en DEV:
 PROMPT SELECT DISTINCT s.tablespace_name,
-PROMPT        CASE WHEN t.tablespace_name IS NOT NULL THEN 'EXISTE' ELSE '*** NO EXISTE ***' END estado
+PROMPT        CASE WHEN t.tablespace_name IS NOT NULL THEN 'OK' ELSE '*** NO EXISTE ***' END estado
 PROMPT FROM   dba_segments s
-PROMPT LEFT JOIN dba_tablespaces t ON t.tablespace_name = s.tablespace_name
-PROMPT WHERE  s.owner = '&v_schema'
-PROMPT ORDER BY 1;
+PROMPT LEFT   JOIN dba_tablespaces t ON t.tablespace_name = s.tablespace_name
+PROMPT WHERE  s.owner = '&v_schema' ORDER BY 1;
 
 SPOOL OFF
-PROMPT [OK] Generado: &f_validacion
+PROMPT [OK] dev_2_despues_carga.sql
 
 
 -- ============================================================================
--- RESUMEN FINAL
+-- RESUMEN
 -- ============================================================================
-SET HEADING ON
+SET HEADING  ON
 SET PAGESIZE 14
 SET FEEDBACK ON
 SET VERIFY   ON
 
 PROMPT
 PROMPT ============================================================
-PROMPT  TODOS LOS FICHEROS GENERADOS:
+PROMPT  FICHEROS GENERADOS — esquema: &v_schema
 PROMPT ============================================================
 PROMPT
-PROMPT  [REVISAR PRIMERO]
-PROMPT  1. &f_nls        <- Comparar NLS con DEV antes de todo
-PROMPT  2. &f_auditoria  <- Revisar inválidos, dependencias, perfil
+PROMPT  [REVISAR EN PRE ANTES DE NADA]
+PROMPT  informe_pre.txt
+PROMPT    -> NLS: si NLS_CHARACTERSET difiere con DEV, PARAR
+PROMPT    -> Tablespaces: asegurarse de que existen en DEV
+PROMPT    -> Objetos invalidos: resolver en PRE antes de migrar
+PROMPT    -> Dependencias externas: verificar que existen en DEV
 PROMPT
-PROMPT  [APLICAR EN DEV en este orden]
-PROMPT  3. dev_01_usuario_grants.sql   -> Ajustar password, luego ejecutar
-PROMPT  4. dev_02_ddl_objetos.sql      -> Crear todos los objetos
-PROMPT  5. dev_03_pre_carga.sql        -> Deshabilitar triggers/jobs/FKs
-PROMPT       >>> CARGA DE DATOS (equipo aplicacion) <<<
-PROMPT  6. dev_04_post_carga.sql       -> Rehabilitar + reajustar secuencias
-PROMPT  7. dev_05_validacion.sql       -> Validacion final
-PROMPT
-PROMPT  Conexion DEV: sqlplus / as sysdba (o /@DEV as sysdba)
+PROMPT  [COPIAR A DEV Y EJECUTAR EN ORDEN]
+PROMPT  1. dev_1_antes_carga.sql   (como SYSDBA)
+PROMPT       >>> CARGA DE DATOS <<<
+PROMPT  2. dev_2_despues_carga.sql (como SYSDBA)
 PROMPT ============================================================
 PROMPT
