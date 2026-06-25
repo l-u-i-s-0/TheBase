@@ -276,7 +276,7 @@ SELECT 'GRANT ' || privilege || ' ON "' || owner || '"."' || table_name || '"'
     || ' TO "' || grantee || '"'
     || CASE WHEN grantable='YES' THEN ' WITH GRANT OPTION' ELSE '' END || ';'
 FROM   dba_tab_privs
-WHERE  grantee = UPPER('&v_schema') AND owner != UPPER('&v_schema') ORDER BY 1, 2;
+WHERE  grantee = UPPER('&v_schema') AND owner != UPPER('&v_schema') ORDER BY 1;
 PROMPT
 
 PROMPT -- [7] GRANTS OTORGADOS A OTROS
@@ -285,7 +285,7 @@ SELECT 'GRANT ' || privilege || ' ON "' || owner || '"."' || table_name || '"'
     || ' TO "' || grantee || '"'
     || CASE WHEN grantable='YES' THEN ' WITH GRANT OPTION' ELSE '' END || ';'
 FROM   dba_tab_privs
-WHERE  owner = UPPER('&v_schema') AND grantee != UPPER('&v_schema') ORDER BY 1, 2;
+WHERE  owner = UPPER('&v_schema') AND grantee != UPPER('&v_schema') ORDER BY 1;
 PROMPT
 
 PROMPT -- [8] SINONIMOS PUBLICOS
