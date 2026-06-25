@@ -157,32 +157,34 @@ PROMPT
 -- [1] TABLESPACES: verificar que existen y dar cuota
 -- --------------------------------------------------------------------------
 PROMPT -- ================================================================
-PROMPT -- [0] ESTADO ACTUAL EN DEV — lo que ya existe antes de ejecutar
-PROMPT --     Solo muestra filas si hay algo. Si esta vacio, DEV esta limpio.
+PROMPT -- [0] COMPROBACION PREVIA — el script para si DEV no esta limpio
 PROMPT -- ================================================================
+PROMPT SET SERVEROUTPUT ON SIZE UNLIMITED
+PROMPT DECLARE
+PROMPT   v_schema   VARCHAR2(128) := '&v_schema';
+PROMPT   v_tablas   NUMBER;
+PROMPT   v_usuario  NUMBER;
+PROMPT BEGIN
+PROMPT   SELECT COUNT(*) INTO v_usuario FROM dba_users WHERE username = v_schema;
+PROMPT   SELECT COUNT(*) INTO v_tablas  FROM dba_objects
+PROMPT   WHERE  owner = v_schema AND object_type = 'TABLE';
 PROMPT
-PROMPT -- Usuario:
-PROMPT SELECT username, account_status, created FROM dba_users WHERE username = '&v_schema';
-PROMPT
-PROMPT -- Objetos existentes:
-PROMPT SELECT object_type, COUNT(*) total FROM dba_objects
-PROMPT WHERE  owner = '&v_schema' GROUP BY object_type ORDER BY 1;
-PROMPT
-PROMPT -- Privilegios de sistema ya concedidos:
-PROMPT SELECT privilege FROM dba_sys_privs WHERE grantee = '&v_schema' ORDER BY 1;
-PROMPT
-PROMPT -- Roles ya concedidos:
-PROMPT SELECT granted_role FROM dba_role_privs WHERE grantee = '&v_schema' ORDER BY 1;
-PROMPT
-PROMPT -- Cuotas ya asignadas:
-PROMPT SELECT tablespace_name,
-PROMPT        CASE WHEN max_bytes=-1 THEN 'UNLIMITED' ELSE TO_CHAR(ROUND(max_bytes/1048576,1))||' MB' END cuota
-PROMPT FROM   dba_ts_quotas WHERE username = '&v_schema' ORDER BY 1;
-PROMPT
-PROMPT -- ================================================================
-PROMPT -- Si el usuario ya existe arriba, comentar el bloque [2] CREATE USER
-PROMPT -- Si ya hay objetos, revisar si hay conflictos antes de continuar
-PROMPT -- ================================================================
+PROMPT   IF v_tablas > 0 THEN
+PROMPT     DBMS_OUTPUT.PUT_LINE('');
+PROMPT     DBMS_OUTPUT.PUT_LINE('*** ATENCION: el esquema '||v_schema||' ya tiene '||v_tablas||' tabla(s) en DEV.');
+PROMPT     DBMS_OUTPUT.PUT_LINE('*** Revisar antes de continuar. Si quieres reemplazarlo:');
+PROMPT     DBMS_OUTPUT.PUT_LINE('***   DROP USER "'||v_schema||'" CASCADE;');
+PROMPT     DBMS_OUTPUT.PUT_LINE('*** y vuelve a ejecutar este script.');
+PROMPT     DBMS_OUTPUT.PUT_LINE('');
+PROMPT     RAISE_APPLICATION_ERROR(-20001,
+PROMPT       'Esquema '||v_schema||' no esta vacio en DEV ('||v_tablas||' tablas). Script detenido.');
+PROMPT   ELSIF v_usuario > 0 THEN
+PROMPT     DBMS_OUTPUT.PUT_LINE('INFO: El usuario '||v_schema||' ya existe en DEV pero no tiene tablas. Continuando...');
+PROMPT   ELSE
+PROMPT     DBMS_OUTPUT.PUT_LINE('OK: DEV limpio para el esquema '||v_schema||'. Continuando...');
+PROMPT   END IF;
+PROMPT END;
+PROMPT /
 PROMPT
 
 PROMPT -- [1] TABLESPACES — verificar que existen en DEV y asignar cuota
