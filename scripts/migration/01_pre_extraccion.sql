@@ -29,7 +29,7 @@
 --   dev_05_validacion.sql        Validación final tras la carga
 -- =============================================================================
 
-DEFINE v_schema = 'NOMBRE_ESQUEMA'   -- <<<< UNICO PARAMETRO A CAMBIAR
+DEFINE v_schema = 'JOBPROCESSOR'
 
 -- Derivados (no tocar)
 DEFINE f_nls         = 'pre_informe_NLS.txt'
