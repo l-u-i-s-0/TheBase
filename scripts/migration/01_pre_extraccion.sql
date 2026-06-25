@@ -39,6 +39,8 @@ SPOOL informe_pre.txt
 
 PROMPT ============================================================
 PROMPT  INFORME PRE - ESQUEMA: &v_schema
+PROMPT  Este fichero es solo de lectura. NO ejecutar en SQL*Plus.
+PROMPT  Abrirlo con un editor de texto (Notepad++, vi, etc.)
 SELECT ' Fecha: ' || TO_CHAR(SYSDATE,'DD/MM/YYYY HH24:MI:SS') FROM DUAL;
 PROMPT  Revisar TODO antes de ejecutar en DEV
 PROMPT ============================================================
