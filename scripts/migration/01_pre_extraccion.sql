@@ -804,63 +804,56 @@ SELECT 'BEGIN DBMS_JOB.BROKEN('||job||',FALSE,SYSDATE); COMMIT; END;'||CHR(10)||
 FROM   dba_jobs WHERE schema_user=UPPER('&v_schema') ORDER BY job;
 PROMPT
 
-PROMPT -- [E] REAJUSTAR SECUENCIAS al maximo de los datos cargados
-PROMPT --     Evita ORA-00001 (unique constraint) cuando aplicacion use NEXTVAL
+PROMPT -- [E] REAJUSTAR SECUENCIAS al maximo de los datos cargados en DEV
+PROMPT --     Evita ORA-00001 cuando la aplicacion use NEXTVAL
+PROMPT --     Este bloque se ejecuta dinamicamente en DEV contra los datos reales cargados
 PROMPT
-DECLARE
-  v_owner  VARCHAR2(128) := UPPER('&v_schema');
-  v_col    VARCHAR2(128);
-  v_table  VARCHAR2(128);
-  v_max    NUMBER;
-  v_curr   NUMBER;
-  v_diff   NUMBER;
-  v_sql    VARCHAR2(4000);
-BEGIN
-  -- Para cada secuencia busca la columna y tabla asociada por convencion de nombre
-  -- Si el nombre no sigue convencion, ajustar manualmente
-  FOR s IN (SELECT sequence_name, last_number FROM dba_sequences
-            WHERE sequence_owner=v_owner ORDER BY sequence_name) LOOP
-    BEGIN
-      -- Busca columna DEFAULT que referencie esta secuencia
-      SELECT c.table_name, c.column_name
-      INTO   v_table, v_col
-      FROM   dba_tab_columns c
-      WHERE  c.owner = v_owner
-        AND  UPPER(c.data_default) LIKE '%'||s.sequence_name||'%'
-        AND  ROWNUM = 1;
-
-      v_sql := 'SELECT NVL(MAX("'||v_col||'"),0) FROM "'||v_owner||'"."'||v_table||'"';
-      EXECUTE IMMEDIATE v_sql INTO v_max;
-
-      v_curr := s.last_number;
-      v_diff := v_max - v_curr + 1;
-
-      IF v_diff > 0 THEN
-        DBMS_OUTPUT.PUT_LINE('-- Secuencia '||s.sequence_name
-            ||' (tabla '||v_table||'.'||v_col||') MAX='||v_max||' CURR='||v_curr);
-        DBMS_OUTPUT.PUT_LINE('ALTER SEQUENCE "'||v_owner||'"."'||s.sequence_name
-            ||'" INCREMENT BY '||v_diff||';');
-        DBMS_OUTPUT.PUT_LINE('SELECT "'||v_owner||'"."'||s.sequence_name
-            ||'".NEXTVAL FROM DUAL;');
-        DBMS_OUTPUT.PUT_LINE('ALTER SEQUENCE "'||v_owner||'"."'||s.sequence_name
-            ||'" INCREMENT BY 1;');
-        DBMS_OUTPUT.PUT_LINE('');
-      ELSE
-        DBMS_OUTPUT.PUT_LINE('-- Secuencia '||s.sequence_name||' OK (no requiere ajuste)');
-      END IF;
-    EXCEPTION WHEN NO_DATA_FOUND THEN
-      DBMS_OUTPUT.PUT_LINE('-- ATENCION: '||s.sequence_name
-          ||' — no se encontro columna DEFAULT asociada. Ajustar manualmente.');
-      DBMS_OUTPUT.PUT_LINE('-- ALTER SEQUENCE "'||v_owner||'"."'||s.sequence_name
-          ||'" INCREMENT BY <DIFERENCIA>;');
-      DBMS_OUTPUT.PUT_LINE('-- SELECT "'||v_owner||'"."'||s.sequence_name||'".NEXTVAL FROM DUAL;');
-      DBMS_OUTPUT.PUT_LINE('-- ALTER SEQUENCE "'||v_owner||'"."'||s.sequence_name
-          ||'" INCREMENT BY 1;');
-      DBMS_OUTPUT.PUT_LINE('');
-    END;
-  END LOOP;
-END;
-/
+PROMPT SET SERVEROUTPUT ON SIZE UNLIMITED
+PROMPT
+PROMPT DECLARE
+PROMPT   v_owner VARCHAR2(128) := '&v_schema';
+PROMPT   v_col   VARCHAR2(128);
+PROMPT   v_table VARCHAR2(128);
+PROMPT   v_max   NUMBER;
+PROMPT   v_curr  NUMBER;
+PROMPT   v_diff  NUMBER;
+PROMPT BEGIN
+PROMPT   FOR s IN (SELECT sequence_name, last_number
+PROMPT             FROM   dba_sequences
+PROMPT             WHERE  sequence_owner = v_owner
+PROMPT             ORDER BY sequence_name) LOOP
+PROMPT     BEGIN
+PROMPT       SELECT c.table_name, c.column_name
+PROMPT       INTO   v_table, v_col
+PROMPT       FROM   dba_tab_columns c
+PROMPT       WHERE  c.owner = v_owner
+PROMPT         AND  UPPER(c.data_default) LIKE '%'||s.sequence_name||'%'
+PROMPT         AND  ROWNUM = 1;
+PROMPT       EXECUTE IMMEDIATE
+PROMPT         'SELECT NVL(MAX("'||v_col||'"),0) FROM "'||v_owner||'"."'||v_table||'"'
+PROMPT         INTO v_max;
+PROMPT       v_curr := s.last_number;
+PROMPT       v_diff := v_max - v_curr + 1;
+PROMPT       IF v_diff > 0 THEN
+PROMPT         EXECUTE IMMEDIATE
+PROMPT           'ALTER SEQUENCE "'||v_owner||'"."'||s.sequence_name||'" INCREMENT BY '||v_diff;
+PROMPT         EXECUTE IMMEDIATE
+PROMPT           'SELECT "'||v_owner||'"."'||s.sequence_name||'".NEXTVAL FROM DUAL';
+PROMPT         EXECUTE IMMEDIATE
+PROMPT           'ALTER SEQUENCE "'||v_owner||'"."'||s.sequence_name||'" INCREMENT BY 1';
+PROMPT         DBMS_OUTPUT.PUT_LINE('Ajustada: '||s.sequence_name
+PROMPT           ||' -> '||v_max||' (tabla '||v_table||'.'||v_col||')');
+PROMPT       ELSE
+PROMPT         DBMS_OUTPUT.PUT_LINE('OK: '||s.sequence_name||' (no requiere ajuste)');
+PROMPT       END IF;
+PROMPT     EXCEPTION
+PROMPT       WHEN NO_DATA_FOUND THEN
+PROMPT         DBMS_OUTPUT.PUT_LINE('ATENCION: '||s.sequence_name
+PROMPT           ||' sin columna DEFAULT asociada - revisar manualmente');
+PROMPT     END;
+PROMPT   END LOOP;
+PROMPT END;
+PROMPT /
 PROMPT
 
 PROMPT -- [F] RECOMPILAR OBJETOS INVALIDOS
@@ -885,72 +878,100 @@ SELECT '-- Generado desde PRE el ' || TO_CHAR(SYSDATE,'DD/MM/YYYY HH24:MI:SS') F
 PROMPT -- ==================================================================
 PROMPT
 
-PROMPT -- [1] OBJETOS INVALIDOS (debe ser 0)
-SELECT object_type, object_name, status, last_ddl_time
-FROM   dba_objects WHERE owner='&v_schema' AND status='INVALID'
-ORDER BY object_type, object_name;
-
+PROMPT SET SERVEROUTPUT ON SIZE UNLIMITED
+PROMPT SET LINESIZE 200
+PROMPT SET PAGESIZE 50
 PROMPT
-PROMPT -- [2] RESUMEN CONTEO POR TIPO
-SELECT object_type,
-       COUNT(*) total,
-       SUM(CASE WHEN status='VALID'   THEN 1 ELSE 0 END) validos,
-       SUM(CASE WHEN status='INVALID' THEN 1 ELSE 0 END) invalidos
-FROM   dba_objects WHERE owner='&v_schema'
-GROUP BY object_type ORDER BY object_type;
-
+PROMPT -- [1] OBJETOS INVALIDOS (debe ser 0 filas)
+PROMPT SELECT object_type, object_name, status, last_ddl_time
+PROMPT FROM   dba_objects
+PROMPT WHERE  owner  = '&v_schema'
+PROMPT   AND  status = 'INVALID'
+PROMPT ORDER BY object_type, object_name;
 PROMPT
-PROMPT -- [3] TRIGGERS Y JOBS: verificar estado final
-SELECT trigger_name, status FROM dba_triggers
-WHERE  owner='&v_schema' ORDER BY trigger_name;
-
-SELECT job_name, enabled, state FROM dba_scheduler_jobs
-WHERE  owner='&v_schema' ORDER BY job_name;
-
+PROMPT -- [2] RESUMEN DE OBJETOS POR TIPO
+PROMPT SELECT object_type,
+PROMPT        COUNT(*) total,
+PROMPT        SUM(CASE WHEN status='VALID'   THEN 1 ELSE 0 END) validos,
+PROMPT        SUM(CASE WHEN status='INVALID' THEN 1 ELSE 0 END) invalidos
+PROMPT FROM   dba_objects
+PROMPT WHERE  owner = '&v_schema'
+PROMPT GROUP BY object_type
+PROMPT ORDER BY object_type;
 PROMPT
-PROMPT -- [4] FOREIGN KEYS: verificar que estan habilitadas
-SELECT constraint_name, table_name, status FROM dba_constraints
-WHERE  owner='&v_schema' AND constraint_type='R'
-ORDER BY table_name, constraint_name;
-
+PROMPT -- [3] TRIGGERS: verificar que estan habilitados
+PROMPT SELECT trigger_name, table_name, status
+PROMPT FROM   dba_triggers
+PROMPT WHERE  owner = '&v_schema'
+PROMPT ORDER BY trigger_name;
 PROMPT
-PROMPT -- [5] SECUENCIAS: valor actual vs maximo en tabla
-DECLARE
-  v_owner VARCHAR2(128):='&v_schema';
-  v_col   VARCHAR2(128);
-  v_table VARCHAR2(128);
-  v_max   NUMBER;
-BEGIN
-  FOR s IN (SELECT sequence_name, last_number FROM dba_sequences
-            WHERE sequence_owner=v_owner ORDER BY sequence_name) LOOP
-    BEGIN
-      SELECT c.table_name, c.column_name INTO v_table, v_col
-      FROM   dba_tab_columns c
-      WHERE  c.owner=v_owner AND UPPER(c.data_default) LIKE '%'||s.sequence_name||'%'
-      AND    ROWNUM=1;
-      EXECUTE IMMEDIATE 'SELECT NVL(MAX("'||v_col||'"),0) FROM "'||v_owner||'"."'||v_table||'"'
-        INTO v_max;
-      IF s.last_number <= v_max THEN
-        DBMS_OUTPUT.PUT_LINE('*** ALERTA: '||s.sequence_name
-            ||' NEXTVAL='||s.last_number||' <= MAX_ID='||v_max||' — riesgo de duplicado!');
-      ELSE
-        DBMS_OUTPUT.PUT_LINE('OK: '||s.sequence_name
-            ||' NEXTVAL='||s.last_number||' > MAX_ID='||v_max);
-      END IF;
-    EXCEPTION WHEN OTHERS THEN
-      DBMS_OUTPUT.PUT_LINE('-- '||s.sequence_name||': revisar manualmente');
-    END;
-  END LOOP;
-END;
-/
-
+PROMPT -- [4] JOBS: verificar estado
+PROMPT SELECT job_name, enabled, state
+PROMPT FROM   dba_scheduler_jobs
+PROMPT WHERE  owner = '&v_schema'
+PROMPT ORDER BY job_name;
 PROMPT
-PROMPT -- [6] CUOTAS: verificar espacio disponible
-SELECT tablespace_name,
-       CASE WHEN max_bytes=-1 THEN 'UNLIMITED'
-            ELSE TO_CHAR(ROUND(max_bytes/1048576,2))||' MB' END cuota_max,
-       ROUND(bytes/1048576,2)||' MB' usado
-FROM   dba_ts_quotas WHERE username='&v_schema' ORDER BY 1;
+PROMPT -- [5] FOREIGN KEYS: verificar que estan habilitadas
+PROMPT SELECT constraint_name, table_name, status
+PROMPT FROM   dba_constraints
+PROMPT WHERE  owner           = '&v_schema'
+PROMPT   AND  constraint_type = 'R'
+PROMPT ORDER BY table_name, constraint_name;
+PROMPT
+PROMPT -- [6] SECUENCIAS: verificar que NEXTVAL es mayor que el MAX de la tabla
+PROMPT --     Si aparece ALERTA -> la secuencia genera IDs ya existentes -> ORA-00001
+PROMPT DECLARE
+PROMPT   v_owner VARCHAR2(128) := '&v_schema';
+PROMPT   v_col   VARCHAR2(128);
+PROMPT   v_table VARCHAR2(128);
+PROMPT   v_max   NUMBER;
+PROMPT BEGIN
+PROMPT   FOR s IN (SELECT sequence_name, last_number
+PROMPT             FROM   dba_sequences
+PROMPT             WHERE  sequence_owner = v_owner
+PROMPT             ORDER BY sequence_name) LOOP
+PROMPT     BEGIN
+PROMPT       SELECT c.table_name, c.column_name
+PROMPT       INTO   v_table, v_col
+PROMPT       FROM   dba_tab_columns c
+PROMPT       WHERE  c.owner = v_owner
+PROMPT         AND  UPPER(c.data_default) LIKE '%'||s.sequence_name||'%'
+PROMPT         AND  ROWNUM = 1;
+PROMPT       EXECUTE IMMEDIATE
+PROMPT         'SELECT NVL(MAX("'||v_col||'"),0) FROM "'||v_owner||'"."'||v_table||'"'
+PROMPT         INTO v_max;
+PROMPT       IF s.last_number <= v_max THEN
+PROMPT         DBMS_OUTPUT.PUT_LINE('*** ALERTA: '||s.sequence_name
+PROMPT           ||' NEXTVAL='||s.last_number||' <= MAX_ID='||v_max
+PROMPT           ||' ('||v_table||'.'||v_col||') -> ejecutar dev_04_post_carga.sql [E]');
+PROMPT       ELSE
+PROMPT         DBMS_OUTPUT.PUT_LINE('OK: '||s.sequence_name
+PROMPT           ||' NEXTVAL='||s.last_number||' > MAX_ID='||v_max);
+PROMPT       END IF;
+PROMPT     EXCEPTION WHEN OTHERS THEN
+PROMPT       DBMS_OUTPUT.PUT_LINE('INFO: '||s.sequence_name||' sin columna DEFAULT asociada');
+PROMPT     END;
+PROMPT   END LOOP;
+PROMPT END;
+PROMPT /
+PROMPT
+PROMPT -- [7] CUOTAS: verificar espacio disponible en tablespaces
+PROMPT SELECT tablespace_name,
+PROMPT        CASE WHEN max_bytes = -1 THEN 'UNLIMITED'
+PROMPT             ELSE TO_CHAR(ROUND(max_bytes/1048576,2))||' MB'
+PROMPT        END cuota_max,
+PROMPT        ROUND(bytes/1048576,2)||' MB' usado
+PROMPT FROM   dba_ts_quotas
+PROMPT WHERE  username = '&v_schema'
+PROMPT ORDER BY tablespace_name;
+PROMPT
+PROMPT -- [8] TABLESPACES: verificar que existen en DEV
+PROMPT SELECT DISTINCT s.tablespace_name,
+PROMPT        CASE WHEN t.tablespace_name IS NOT NULL THEN 'EXISTE' ELSE '*** NO EXISTE ***' END estado
+PROMPT FROM   dba_segments s
+PROMPT LEFT JOIN dba_tablespaces t ON t.tablespace_name = s.tablespace_name
+PROMPT WHERE  s.owner = '&v_schema'
+PROMPT ORDER BY 1;
 
 SPOOL OFF
 PROMPT [OK] Generado: &f_validacion
