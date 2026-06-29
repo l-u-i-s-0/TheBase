@@ -85,3 +85,43 @@ impdp \"/ as sysdba\" schemas=JOBPROCESOR directory=SCTASH24167274 \
 Opcion A. Es un solo flujo, garantiza cero residuos y recrea tambien el
 usuario con la configuracion de PRE. El backup del paso 1 cubre cualquier
 imprevisto con grants externos.
+
+---
+
+## Problema de zona horaria (ORA-39405 en el impdp)
+
+Si PRE y DEV tienen distinta version de fichero de timezone, el impdp DIRECTO
+falla con:
+
+    ORA-39405: Oracle Data Pump does not support importing from a source
+    database with TSTZ version N+1 into a target database with TSTZ version N.
+
+No hay flag para "ignorarlo" al importar datos: Oracle lo bloquea para no
+corromper columnas TIMESTAMP WITH TIME ZONE. PERO ese bloqueo solo aplica al
+mover DATOS. Como aqui solo queremos DDL, se esquiva.
+
+### Solucion (encaja con solo-DDL): usar SQLFILE
+El impdp con sqlfile= lee el dump y escribe el SQL a un fichero, sin crear nada
+ni mover datos TSTZ, asi que normalmente NO dispara el ORA-39405.
+
+```bash
+impdp \"/ as sysdba\" schemas=JOBPROCESOR directory=SCTASH24167274 \
+  dumpfile=JOBPROCESOR_ddl.dmp logfile=JOBPROCESOR_sqlfile.log \
+  sqlfile=JOBPROCESOR_ddl.sql
+```
+Luego: DROP USER JOBPROCESOR CASCADE;  y ejecutar el .sql a mano en DEV.
+
+### Diagnostico
+```sql
+@diagnostico_timezone.sql   -- en PRE y en DEV, comparar version
+```
+
+### Fallbacks si el SQLFILE tambien fallara
+1. Re-exportar en PRE con VERSION= compatible (degrada el dump):
+   ```bash
+   expdp \"/ as sysdba\" schemas=JOBPROCESOR content=METADATA_ONLY version=19.0.0 \
+     directory=SCTASH24167274 dumpfile=JOBPROCESOR_ddl_v2.dmp \
+     logfile=JOBPROCESOR_ddl_v2.log
+   ```
+2. Subir el fichero de timezone de DEV con DBMS_DST (tarea de DBA, ventana de
+   mantenimiento). Es la solucion permanente y correcta, pero mas lenta.
