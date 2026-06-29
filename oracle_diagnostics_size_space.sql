@@ -84,3 +84,33 @@ WHERE owner = 'EXHPRO'
 -- Conteo de filas (para estimar tamaño esperado vs real)
 SELECT COUNT(*) AS num_filas
 FROM EXHPRO.SMARTPRICING_CUSTOMER_PRICES_U_TMP;
+
+
+-- ============================================================
+-- 4. TAMAÑO TOTAL DE LA TABLA Y DEL LOB DE LA COLUMNA PRECIO
+-- ============================================================
+
+-- Espacio asignado en disco: segmento de tabla + segmento LOB + índice LOB
+SELECT
+    s.segment_type,
+    s.segment_name,
+    s.bytes/1024/1024 AS mb
+FROM dba_segments s
+WHERE s.owner = 'EXHPRO'
+  AND s.segment_name IN (
+      SELECT table_name  FROM dba_lobs WHERE owner = 'EXHPRO' AND table_name = 'SMARTPRICING_CUSTOMER_PRICES_U_TMP' AND column_name = 'PRECIO'
+      UNION ALL
+      SELECT segment_name FROM dba_lobs WHERE owner = 'EXHPRO' AND table_name = 'SMARTPRICING_CUSTOMER_PRICES_U_TMP' AND column_name = 'PRECIO'
+      UNION ALL
+      SELECT index_name   FROM dba_lobs WHERE owner = 'EXHPRO' AND table_name = 'SMARTPRICING_CUSTOMER_PRICES_U_TMP' AND column_name = 'PRECIO'
+  )
+ORDER BY segment_type;
+
+-- Tamaño real del contenido almacenado en los CLOBs (bytes efectivos, no espacio asignado)
+SELECT
+    COUNT(*)                                          AS num_filas,
+    SUM(DBMS_LOB.GETLENGTH(PRECIO))/1024/1024        AS total_content_mb,
+    AVG(DBMS_LOB.GETLENGTH(PRECIO))/1024             AS avg_content_kb,
+    MAX(DBMS_LOB.GETLENGTH(PRECIO))/1024             AS max_content_kb,
+    MIN(DBMS_LOB.GETLENGTH(PRECIO))/1024             AS min_content_kb
+FROM EXHPRO.SMARTPRICING_CUSTOMER_PRICES_U_TMP;
