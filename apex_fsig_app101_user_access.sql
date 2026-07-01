@@ -29,9 +29,19 @@ SELECT view_name FROM dba_views WHERE view_name LIKE 'APEX%AUTH%' ORDER BY view_
 
 -- =====================================================================
 -- Usuarios de workspace registrados en APEX (admins/developers)
--- Esta lista la mantiene APEX aunque la autenticacion sea Database Accounts
+-- Esta lista la mantiene APEX aunque la autenticacion sea Database Accounts.
+--
+-- OJO: en esta version de APEX la columna LAST_ACCESS_DATE no existe
+-- (ORA-00904). Verificar primero las columnas reales de la vista:
 -- =====================================================================
-SELECT workspace_name, user_name, default_schema, account_type, last_access_date
+SELECT column_name
+FROM   dba_tab_columns
+WHERE  table_name = 'APEX_WORKSPACE_APEX_USERS'
+ORDER BY column_name;
+
+-- Ajustar el SELECT con el nombre real de la columna de ultimo acceso
+-- (ejemplo generico sin esa columna, siempre valido):
+SELECT workspace_name, user_name, default_schema, account_type
 FROM   apex_workspace_apex_users
 WHERE  workspace_name = 'FSIG'
 ORDER BY user_name;
@@ -39,11 +49,30 @@ ORDER BY user_name;
 -- =====================================================================
 -- Cuentas de base de datos con privilegios sobre el schema real de la
 -- aplicacion (ODS) -- universo de LOGIN ID con acceso a los datos
+--
+-- dba_tab_privs tiene una fila por (grantee, tabla, privilegio), por lo
+-- que el conteo total puede ser muy alto (miles de filas) sin que eso
+-- signifique miles de usuarios distintos. Agrupar por grantee:
 -- =====================================================================
-SELECT grantee, privilege
+
+-- Lista distinta de grantees (usuarios o roles) con acceso a ODS
+SELECT DISTINCT grantee
 FROM   dba_tab_privs
 WHERE  owner = 'ODS'
 ORDER BY grantee;
+
+-- Resumen: privilegios y cantidad de objetos por grantee
+SELECT grantee, privilege, COUNT(*) AS objetos
+FROM   dba_tab_privs
+WHERE  owner = 'ODS'
+GROUP BY grantee, privilege
+ORDER BY grantee, privilege;
+
+-- Si algun grantee es un ROL (no un usuario final), ver a quien se lo
+-- otorgaron para llegar al LOGIN ID real:
+SELECT grantee AS login_id
+FROM   dba_role_privs
+WHERE  granted_role = '&&ROLE_NAME';
 
 -- =====================================================================
 -- Cuentas de base de datos activas (candidatas a LOGIN ID real)
