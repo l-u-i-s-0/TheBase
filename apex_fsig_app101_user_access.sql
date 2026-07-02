@@ -22,36 +22,49 @@ ORDER BY application_id;
 
 -- =====================================================================
 -- Esquema de autenticacion: apex_application_authentication no existe
--- en esta version de APEX (ORA-00942). Localizar el nombre real de la
--- vista antes de reintentar la verificacion por esta via:
+-- en esta version de APEX (ORA-00942). Vistas reales disponibles:
+--   APEX_APPLICATION_ALL_AUTH, APEX_APPLICATION_AUTH,
+--   APEX_APPLICATION_AUTHORIZATION
 -- =====================================================================
 SELECT view_name FROM dba_views WHERE view_name LIKE 'APEX%AUTH%' ORDER BY view_name;
+
+-- Columnas reales de apex_application_auth (verificar antes de usarla)
+SELECT LISTAGG(column_name, ', ') WITHIN GROUP (ORDER BY column_name) AS columnas
+FROM   dba_tab_columns
+WHERE  table_name = 'APEX_APPLICATION_AUTH';
 
 -- =====================================================================
 -- Usuarios de workspace registrados en APEX (admins/developers)
 -- Esta lista la mantiene APEX aunque la autenticacion sea Database Accounts.
 --
--- OJO: en esta version de APEX ni LAST_ACCESS_DATE ni ACCOUNT_TYPE
--- existen en la vista (ORA-00904 en ambos casos). El listado por
--- pantalla se corta con el scroll de la terminal, asi que conviene
--- traer todas las columnas en una sola fila (LISTAGG) o volcarlas a
--- un archivo (SPOOL) antes de armar el SELECT final:
+-- Columnas reales confirmadas en esta version (ORA-00904 en
+-- LAST_ACCESS_DATE y ACCOUNT_TYPE, que NO existen aqui):
+--   ACCOUNT_EXPIRY, ACCOUNT_LOCKED, AVAILABLE_SCHEMAS, DATE_CREATED,
+--   DATE_LAST_UPDATED, DESCRIPTION, EMAIL, FAILED_ACCESS_ATTEMPTS,
+--   FIRST_NAME, FIRST_SCHEMA_PROVISIONED, IS_ADMIN,
+--   IS_APPLICATION_DEVELOPER, LAST_NAME, PASSWORD_VERSION,
+--   PROFILE_CHARSET, PROFILE_FILENAME, PROFILE_IMAGE_NAME,
+--   PROFILE_MIMETYPE, USER_NAME, WORKSPACE_DISPLAY_NAME,
+--   WORKSPACE_ID, WORKSPACE_NAME
+--
+-- FIRST_NAME/LAST_NAME/EMAIL cubren el FULLNAME pedido en el ticket, e
+-- IS_ADMIN / IS_APPLICATION_DEVELOPER hacen de PROFILE. Confirmar antes
+-- el literal real de esas dos columnas (se asume 'Yes'/'No'):
 -- =====================================================================
-SELECT LISTAGG(column_name, ', ') WITHIN GROUP (ORDER BY column_name) AS columnas
-FROM   dba_tab_columns
-WHERE  table_name = 'APEX_WORKSPACE_APEX_USERS';
+SELECT DISTINCT is_admin, is_application_developer
+FROM   apex_workspace_apex_users;
 
--- Alternativa sin limite de longitud, a archivo:
--- SET PAGESIZE 200
--- SET LINESIZE 200
--- SPOOL /tmp/apex_workspace_apex_users_cols.txt
--- SELECT column_name FROM dba_tab_columns
--- WHERE  table_name = 'APEX_WORKSPACE_APEX_USERS' ORDER BY column_name;
--- SPOOL OFF
-
--- Una vez confirmadas las columnas reales, ajustar este SELECT
--- (USER_NAME y WORKSPACE_NAME ya estan confirmadas; el resto pendiente):
-SELECT workspace_name, user_name
+SELECT user_name                             AS login_id,
+       TRIM(first_name || ' ' || last_name)  AS fullname,
+       email,
+       CASE WHEN is_admin = 'Yes'                THEN 'Workspace Administrator'
+            WHEN is_application_developer = 'Yes' THEN 'Developer'
+            ELSE 'End User'
+       END                                   AS profile,
+       available_schemas,
+       account_locked,
+       date_created,
+       date_last_updated
 FROM   apex_workspace_apex_users
 WHERE  workspace_name = 'FSIG'
 ORDER BY user_name;
