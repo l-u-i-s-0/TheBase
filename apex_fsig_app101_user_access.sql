@@ -54,20 +54,25 @@ WHERE  table_name = 'APEX_APPLICATION_AUTH';
 SELECT DISTINCT is_admin, is_application_developer
 FROM   apex_workspace_apex_users;
 
-SELECT user_name                             AS login_id,
-       TRIM(first_name || ' ' || last_name)  AS fullname,
-       email,
-       CASE WHEN is_admin = 'Yes'                THEN 'Workspace Administrator'
-            WHEN is_application_developer = 'Yes' THEN 'Developer'
+-- Version con DB_PROFILE (perfil de recursos/password de Oracle,
+-- DBA_USERS.PROFILE) ademas del profile logico de APEX. LEFT JOIN porque
+-- un USER_NAME de APEX no siempre corresponde 1:1 a una cuenta de BD.
+SELECT w.user_name                                   AS login_id,
+       TRIM(w.first_name || ' ' || w.last_name)       AS fullname,
+       w.email,
+       CASE WHEN w.is_admin = 'Yes'                THEN 'Workspace Administrator'
+            WHEN w.is_application_developer = 'Yes' THEN 'Developer'
             ELSE 'End User'
-       END                                   AS profile,
-       available_schemas,
-       account_locked,
-       date_created,
-       date_last_updated
-FROM   apex_workspace_apex_users
-WHERE  workspace_name = 'FSIG'
-ORDER BY user_name;
+       END                                            AS apex_profile,
+       u.profile                                       AS db_profile,
+       w.available_schemas,
+       w.account_locked,
+       w.date_created,
+       w.date_last_updated
+FROM   apex_workspace_apex_users w
+LEFT JOIN dba_users u ON u.username = w.user_name
+WHERE  w.workspace_name = 'FSIG'
+ORDER BY w.user_name;
 
 -- =====================================================================
 -- Cuentas de base de datos con privilegios sobre el schema real de la
@@ -90,6 +95,17 @@ FROM   dba_tab_privs
 WHERE  owner = 'ODS'
 GROUP BY grantee, privilege
 ORDER BY grantee, privilege;
+
+-- Nombres de schema reales por grantee (en vez de un simple conteo),
+-- mas el profile de base de datos de cada cuenta. Sin filtrar por owner
+-- para ver TODOS los schemas a los que accede cada grantee, no solo ODS:
+SELECT t.grantee,
+       u.profile                                              AS db_profile,
+       LISTAGG(t.owner, ', ') WITHIN GROUP (ORDER BY t.owner)  AS schemas_con_acceso
+FROM   (SELECT DISTINCT grantee, owner FROM dba_tab_privs) t
+LEFT JOIN dba_users u ON u.username = t.grantee
+GROUP BY t.grantee, u.profile
+ORDER BY t.grantee;
 
 -- Si algun grantee es un ROL (no un usuario final), ver a quien se lo
 -- otorgaron para llegar al LOGIN ID real:
