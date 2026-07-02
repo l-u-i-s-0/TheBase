@@ -31,17 +31,27 @@ SELECT view_name FROM dba_views WHERE view_name LIKE 'APEX%AUTH%' ORDER BY view_
 -- Usuarios de workspace registrados en APEX (admins/developers)
 -- Esta lista la mantiene APEX aunque la autenticacion sea Database Accounts.
 --
--- OJO: en esta version de APEX la columna LAST_ACCESS_DATE no existe
--- (ORA-00904). Verificar primero las columnas reales de la vista:
+-- OJO: en esta version de APEX ni LAST_ACCESS_DATE ni ACCOUNT_TYPE
+-- existen en la vista (ORA-00904 en ambos casos). El listado por
+-- pantalla se corta con el scroll de la terminal, asi que conviene
+-- traer todas las columnas en una sola fila (LISTAGG) o volcarlas a
+-- un archivo (SPOOL) antes de armar el SELECT final:
 -- =====================================================================
-SELECT column_name
+SELECT LISTAGG(column_name, ', ') WITHIN GROUP (ORDER BY column_name) AS columnas
 FROM   dba_tab_columns
-WHERE  table_name = 'APEX_WORKSPACE_APEX_USERS'
-ORDER BY column_name;
+WHERE  table_name = 'APEX_WORKSPACE_APEX_USERS';
 
--- Ajustar el SELECT con el nombre real de la columna de ultimo acceso
--- (ejemplo generico sin esa columna, siempre valido):
-SELECT workspace_name, user_name, default_schema, account_type
+-- Alternativa sin limite de longitud, a archivo:
+-- SET PAGESIZE 200
+-- SET LINESIZE 200
+-- SPOOL /tmp/apex_workspace_apex_users_cols.txt
+-- SELECT column_name FROM dba_tab_columns
+-- WHERE  table_name = 'APEX_WORKSPACE_APEX_USERS' ORDER BY column_name;
+-- SPOOL OFF
+
+-- Una vez confirmadas las columnas reales, ajustar este SELECT
+-- (USER_NAME y WORKSPACE_NAME ya estan confirmadas; el resto pendiente):
+SELECT workspace_name, user_name
 FROM   apex_workspace_apex_users
 WHERE  workspace_name = 'FSIG'
 ORDER BY user_name;
